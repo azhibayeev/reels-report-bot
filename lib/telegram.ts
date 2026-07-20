@@ -10,12 +10,19 @@ function chatId(): string {
   return id;
 }
 
+// Необязательный ID темы (вкладки) форум-группы: задан — пишем в неё, нет — в General.
+function threadId(): string | undefined {
+  return process.env.TELEGRAM_THREAD_ID || undefined;
+}
+
 export async function sendMessage(html: string): Promise<void> {
+  const thread = threadId();
   const res = await fetch(api("sendMessage"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       chat_id: chatId(),
+      ...(thread ? { message_thread_id: Number(thread) } : {}),
       text: html,
       parse_mode: "HTML",
       link_preview_options: { is_disabled: true },
@@ -29,6 +36,8 @@ export async function sendMessage(html: string): Promise<void> {
 export async function sendDocument(filename: string, content: string, caption?: string): Promise<void> {
   const form = new FormData();
   form.append("chat_id", chatId());
+  const thread = threadId();
+  if (thread) form.append("message_thread_id", thread);
   if (caption) form.append("caption", caption);
   form.append("document", new Blob([content], { type: "text/csv" }), filename);
   const res = await fetch(api("sendDocument"), { method: "POST", body: form });

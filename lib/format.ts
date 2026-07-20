@@ -43,13 +43,13 @@ function reelLink(r: ReelReport): string {
 const NEW_REELS_LIMIT = 20;
 
 export function formatMessage(r: Report): string {
-  const period = r.periodStart
-    ? `${fmtDateTime(r.periodStart)} — ${fmtDateTime(r.periodEnd)}`
-    : `по состоянию на ${fmtDateTime(r.periodEnd)}`;
-
   const lines: string[] = [];
   lines.push("📊 <b>Отчёт по рилсам</b>");
-  lines.push(`Период: ${period} (время Джакарты)`);
+  if (r.periodStart) {
+    lines.push(`Период: с ${fmtDateTime(r.periodStart)} по ${fmtDateTime(r.periodEnd)} (время Джакарты)`);
+  } else {
+    lines.push(`Первый замер: ${fmtDateTime(r.periodEnd)} (время Джакарты)`);
+  }
   lines.push("");
 
   if (r.isBaseline) {
@@ -61,7 +61,8 @@ export function formatMessage(r: Report): string {
   }
 
   lines.push("");
-  lines.push(`🆕 Новых рилсов за период: <b>${r.newReels.length}</b>`);
+  const newLabel = r.isBaseline ? "за последние 24 часа" : "за период";
+  lines.push(`🆕 Новых рилсов ${newLabel}: <b>${r.newReels.length}</b>`);
   r.newReels.slice(0, NEW_REELS_LIMIT).forEach((reel, i) => {
     lines.push(`${i + 1}. ${reelLink(reel)} — ${nf.format(reel.views)} просмотров`);
   });
