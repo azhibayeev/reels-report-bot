@@ -52,6 +52,8 @@
 3. Найдите вашего бота по имени и добавьте его в группу.
 4. Дайте боту права **Send Messages** (отправка сообщений) — обычно это включено по умолчанию.
 
+> **Важно:** если группа является супергруппой или каналом, сделайте бота администратором с правом отправки сообщений — без этого бот не сможет писать в чат.
+
 ### 2.2. Узнать ID чата
 
 5. Напишите в группу любое сообщение (например, `/start` или просто «Привет»).
@@ -108,12 +110,12 @@
 ```bash
 vercel env add IG_ACCESS_TOKEN production
 ```
-*(введите токен Instagram из Шага 1.3 и нажмите Enter)*
+*(введите токен Instagram из раздела 1, шага 1.3 и нажмите Enter)*
 
 ```bash
 vercel env add IG_USER_ID production
 ```
-*(введите Instagram User ID из Шага 1.4 и нажмите Enter)*
+*(введите Instagram User ID из раздела 1, шага 1.4 и нажмите Enter)*
 
 ```bash
 vercel env add TELEGRAM_BOT_TOKEN production
@@ -123,7 +125,7 @@ vercel env add TELEGRAM_BOT_TOKEN production
 ```bash
 vercel env add TELEGRAM_CHAT_ID production
 ```
-*(введите ID группового чата из Шага 2.2, включая знак минус, и нажмите Enter)*
+*(введите ID группового чата из раздела 2, шага 2.2, включая знак минус, и нажмите Enter)*
 
 Сгенерируйте случайный секрет для защиты ручного запуска:
 
@@ -138,7 +140,7 @@ vercel env add CRON_SECRET production
 ```
 *(вставьте сгенерированную строку и нажмите Enter)*
 
-Сохраните значение `CRON_SECRET` — оно понадобится в Шаге 4.
+Сохраните значение `CRON_SECRET` — оно понадобится в разделе «Шаг 4. Проверка работы».
 
 ### 3.4. Запустить деплой
 
@@ -154,10 +156,10 @@ vercel --prod
 
 ### 4.1. Ручной запуск первого отчёта
 
-Выполните в терминале (подставьте ваш `CRON_SECRET` и URL проекта):
+Выполните в терминале, заменив `<CRON_SECRET>` на значение из шага 3.3 и `<project>` на имя вашего проекта на Vercel:
 
 ```bash
-curl -H "Authorization: Bearer ВАШ_CRON_SECRET" \
+curl -H "Authorization: Bearer <CRON_SECRET>" \
   https://<project>.vercel.app/api/report
 ```
 
