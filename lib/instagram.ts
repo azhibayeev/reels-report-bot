@@ -15,10 +15,10 @@ interface RawMedia {
   caption?: string;
 }
 
-export async function fetchAllReels(token: string): Promise<IgMedia[]> {
+export async function fetchAllReels(igUserId: string, token: string): Promise<IgMedia[]> {
   const out: RawMedia[] = [];
   let url: string | null =
-    `${G}/me/media?fields=id,media_product_type,permalink,timestamp,caption&limit=100&access_token=${encodeURIComponent(token)}`;
+    `${G}/${igUserId}/media?fields=id,media_product_type,permalink,timestamp,caption&limit=100&access_token=${encodeURIComponent(token)}`;
   while (url) {
     const res = await fetch(url);
     if (!res.ok) {
@@ -53,7 +53,6 @@ export async function fetchViews(token: string, mediaIds: string[]): Promise<Map
         if (!res.ok) {
           // Инсайты бывают недоступны для отдельных медиа — не роняем весь отчёт.
           console.error(`insights failed for ${id}: ${res.status} ${await res.text()}`);
-          views.set(id, 0);
           continue;
         }
         const data: {
@@ -63,7 +62,6 @@ export async function fetchViews(token: string, mediaIds: string[]): Promise<Map
         views.set(id, metric?.total_value?.value ?? metric?.values?.[0]?.value ?? 0);
       } catch (e) {
         console.error(`insights error for ${id}:`, e);
-        views.set(id, 0);
       }
     }
   }

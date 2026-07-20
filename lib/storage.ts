@@ -39,6 +39,11 @@ export async function loadPreviousSnapshot(todayKey: string): Promise<Snapshot |
 export interface TokenState {
   token: string;
   refreshedAt: string;
+  seedHash?: string;
+}
+
+export function sha256Hex(s: string): string {
+  return crypto.createHash("sha256").update(s).digest("hex");
 }
 
 // Токен хранится в Blob в зашифрованном виде: blob-URL публичный,
