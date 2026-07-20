@@ -37,7 +37,7 @@ function reelLink(r: ReelReport): string {
       ? firstLine.slice(0, 40) + "…"
       : firstLine
     : `Рилс от ${dateOnly.format(new Date(r.publishedAt))}`;
-  return `<a href="${r.permalink}">${escapeHtml(title)}</a>`;
+  return `<a href="${escapeHtml(r.permalink)}">${escapeHtml(title)}</a>`;
 }
 
 const NEW_REELS_LIMIT = 20;

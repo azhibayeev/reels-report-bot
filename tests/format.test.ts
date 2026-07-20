@@ -54,6 +54,15 @@ describe("formatMessage", () => {
     const msg = formatMessage(computeReport(curr, prev));
     expect(msg).toContain("&lt;b&gt;жирный &amp; смелый&lt;/b&gt;");
   });
+
+  it("escapes ampersands in permalink hrefs", () => {
+    const prev: Snapshot = { takenAt: T0, reels: [] };
+    const r = reel("q", 5, "2026-07-19T10:00:00Z");
+    r.permalink = "https://www.instagram.com/reel/q/?igsh=abc&utm=1";
+    const curr: Snapshot = { takenAt: T1, reels: [r] };
+    const msg = formatMessage(computeReport(curr, prev));
+    expect(msg).toContain('href="https://www.instagram.com/reel/q/?igsh=abc&amp;utm=1"');
+  });
 });
 
 describe("formatCsv", () => {
