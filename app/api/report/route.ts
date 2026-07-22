@@ -93,7 +93,7 @@ export async function GET(req: NextRequest) {
     await sendDocument(
       `reels-${todayKey}.csv`,
       formatCsv(report),
-      "Полная таблица по всем рилсам"
+      "Таблица: все рилсы со ссылками, отсортированы по приросту. Строки 1–10 = ТОП-10 🏆"
     );
 
     return NextResponse.json({

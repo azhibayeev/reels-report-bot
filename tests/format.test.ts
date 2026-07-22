@@ -20,59 +20,43 @@ function sampleReport() {
 }
 
 describe("formatMessage", () => {
-  it("includes Russian header, totals, new reels and top with links", () => {
+  it("is a compact summary: period, new reels count and gain, total gain, total views", () => {
     const msg = formatMessage(sampleReport());
     expect(msg).toContain("Отчёт по рилсам");
+    expect(msg).toContain("Период: с");
     expect(msg).toContain("время Джакарты");
     expect(msg).toContain("Новых рилсов за период: <b>1</b>");
-    expect(msg).toContain('href="https://www.instagram.com/reel/n/"');
-    expect(msg).toContain("Топ-2 по приросту");
-    // top sorted: new reel n (gain 900) before a (gain 80)
-    expect(msg.indexOf("reel/n/")).toBeLessThan(msg.lastIndexOf("reel/a/"));
+    // new reel n gained 900 (all its views)
+    expect(msg).toContain("Новые рилсы набрали за эти 24 часа");
+    expect(msg).toContain("<b>900</b> просмотров");
+    // total gain = 80 (a) + 900 (n) = 980; total views = 180 + 900 = 1080
+    expect(msg).toContain("Прирост ТОТАЛ просмотров за последние 24 часа: <b>+980</b>");
+    expect(msg).toContain("ТОТАЛ просмотров по 2 рилсам");
+    expect(msg).toContain(`<b>${new Intl.NumberFormat("ru-RU").format(1080)}</b>`);
+    // no per-reel links in the message — they live in the CSV table
+    expect(msg).not.toContain("href=");
   });
 
-  it("baseline report explains that gains start tomorrow and has no top section", () => {
+  it("baseline report has first-measurement wording and no gain lines", () => {
     const curr: Snapshot = { takenAt: T1, reels: [reel("a", 100, "2026-07-01T00:00:00Z")] };
     const msg = formatMessage(computeReport(curr, null));
+    expect(msg).toContain("Первый замер");
     expect(msg).toContain("базовый замер");
-    expect(msg).not.toContain("Топ-");
-  });
-
-  it("caps the new-reels list at 20 with a remainder line", () => {
-    const prev: Snapshot = { takenAt: T0, reels: [] };
-    const curr: Snapshot = {
-      takenAt: T1,
-      reels: Array.from({ length: 25 }, (_, i) => reel(`n${i}`, i, "2026-07-19T10:00:00Z")),
-    };
-    const msg = formatMessage(computeReport(curr, prev));
-    expect(msg).toContain("… и ещё 5");
-  });
-
-  it("escapes HTML in captions", () => {
-    const prev: Snapshot = { takenAt: T0, reels: [] };
-    const curr: Snapshot = { takenAt: T1, reels: [reel("x", 5, "2026-07-19T10:00:00Z", "<b>жирный & смелый</b>")] };
-    const msg = formatMessage(computeReport(curr, prev));
-    expect(msg).toContain("&lt;b&gt;жирный &amp; смелый&lt;/b&gt;");
-  });
-
-  it("escapes ampersands in permalink hrefs", () => {
-    const prev: Snapshot = { takenAt: T0, reels: [] };
-    const r = reel("q", 5, "2026-07-19T10:00:00Z");
-    r.permalink = "https://www.instagram.com/reel/q/?igsh=abc&utm=1";
-    const curr: Snapshot = { takenAt: T1, reels: [r] };
-    const msg = formatMessage(computeReport(curr, prev));
-    expect(msg).toContain('href="https://www.instagram.com/reel/q/?igsh=abc&amp;utm=1"');
+    expect(msg).toContain("Новых рилсов за последние 24 часа");
+    expect(msg).not.toContain("Прирост ТОТАЛ");
   });
 });
 
 describe("formatCsv", () => {
-  it("has BOM, Russian header and one row per reel, sorted by gain desc", () => {
+  it("has BOM, rank column, Russian header and one row per reel, sorted by gain desc", () => {
     const csv = formatCsv(sampleReport());
     expect(csv.startsWith("﻿")).toBe(true);
     const lines = csv.slice(1).split("\r\n");
-    expect(lines[0]).toBe("Ссылка;Дата публикации;Просмотров всего;Прирост за период");
+    expect(lines[0]).toBe("№;Ссылка;Дата публикации;Просмотров всего;Прирост за период");
     expect(lines).toHaveLength(3);
+    expect(lines[1].startsWith("1;")).toBe(true);
     expect(lines[1]).toContain("reel/n/"); // gain 900 first
+    expect(lines[2].startsWith("2;")).toBe(true);
     expect(lines[2]).toContain("reel/a/");
   });
 
