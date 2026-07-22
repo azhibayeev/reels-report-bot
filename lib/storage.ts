@@ -36,6 +36,33 @@ export async function loadPreviousSnapshot(todayKey: string): Promise<Snapshot |
   return (await res.json()) as Snapshot;
 }
 
+const LAST_REPORT_PATH = "state/last-report.json";
+
+// Ключ дня, за который отчёт уже отправлен, — защита от дублей,
+// когда срабатывают и внешний планировщик, и запасной крон Vercel.
+export async function saveLastReportKey(key: string): Promise<void> {
+  await put(LAST_REPORT_PATH, JSON.stringify({ key }), {
+    access: "public",
+    contentType: "application/json",
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    cacheControlMaxAge: 60,
+  });
+}
+
+export async function loadLastReportKey(): Promise<string | null> {
+  const { blobs } = await list({ prefix: LAST_REPORT_PATH });
+  const blob = blobs.find((b) => b.pathname === LAST_REPORT_PATH);
+  if (!blob) return null;
+  const res = await fetch(`${blob.url}?ts=${Date.now()}`, { cache: "no-store" });
+  if (!res.ok) return null;
+  try {
+    return ((await res.json()) as { key?: string }).key ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export interface TokenState {
   token: string;
   refreshedAt: string;

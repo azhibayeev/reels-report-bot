@@ -4,8 +4,10 @@ import { escapeHtml, formatCsv, formatMessage } from "../../../lib/format";
 import { fetchAllReels, fetchViews, refreshLongLivedToken } from "../../../lib/instagram";
 import {
   jakartaDateKey,
+  loadLastReportKey,
   loadPreviousSnapshot,
   loadTokenState,
+  saveLastReportKey,
   saveSnapshot,
   saveTokenState,
   sha256Hex,
@@ -64,6 +66,14 @@ export async function GET(req: NextRequest) {
   try {
     if (!process.env.IG_USER_ID) throw new Error("IG_USER_ID is not set");
 
+    // Дедупликация: внешний планировщик и запасной крон Vercel могут сработать
+    // в один день оба — второй запуск молча пропускается. ?force=1 — для ручных тестов.
+    const force = req.nextUrl.searchParams.get("force") === "1";
+    const todayKeyNow = jakartaDateKey(new Date());
+    if (!force && (await loadLastReportKey()) === todayKeyNow) {
+      return NextResponse.json({ ok: true, skipped: true, reason: `report for ${todayKeyNow} already sent` });
+    }
+
     const token = await resolveToken();
 
     const media = await fetchAllReels(process.env.IG_USER_ID, token);
@@ -95,6 +105,7 @@ export async function GET(req: NextRequest) {
       formatCsv(report),
       "Таблица: все рилсы со ссылками, отсортированы по приросту. Строки 1–10 = ТОП-10 🏆"
     );
+    await saveLastReportKey(todayKey);
 
     return NextResponse.json({
       ok: true,
