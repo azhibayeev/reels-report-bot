@@ -20,7 +20,7 @@ interface TelegramUpdate {
 
 const HELP =
   "Команды:\n" +
-  "/now — спринт-отчёт: с последнего ежедневного замера (~12:30) по текущий момент\n" +
+  "/now — отчёт с 12:30 вчера по текущий момент\n" +
   "/info — общая статистика по всем рилсам";
 
 // Живой замер: список рилсов + актуальные просмотры. Снапшот НЕ сохраняем,
@@ -85,7 +85,7 @@ export async function GET(req: NextRequest) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       commands: [
-        { command: "now", description: "Спринт-отчёт: с последнего замера 12:30 по сейчас" },
+        { command: "now", description: "Отчёт с 12:30 вчера по сейчас" },
         { command: "info", description: "Общая статистика по всем рилсам" },
       ],
     }),

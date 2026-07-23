@@ -84,11 +84,11 @@ describe("formatInfoMessage", () => {
 describe("formatNowMessage", () => {
   it("is a compact sprint report: period, videos published, gain, total", () => {
     const msg = formatNowMessage(sampleReport());
-    expect(msg).toContain("Спринт-отчёт");
+    expect(msg).toContain("Отчёт на сейчас");
     expect(msg).toContain("время Джакарты");
     expect(msg).toContain("Выпущено видео: <b>1</b>");
     expect(msg).toContain("Новые видео набрали: <b>900</b> просмотров");
-    expect(msg).toContain("Прирост просмотров за спринт: <b>+980</b>");
+    expect(msg).toContain("Прирост с 12:30 вчера: <b>+980</b>");
     expect(msg).toContain("ТОТАЛ просмотров по 2 рилсам");
     expect(msg).not.toContain("href=");
   });

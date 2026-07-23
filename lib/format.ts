@@ -69,10 +69,10 @@ export function formatInfoMessage(snap: Snapshot): string {
   return lines.join("\n");
 }
 
-// Ответ на команду /now: спринт от последнего ежедневного замера (~12:30) до текущего момента.
+// Ответ на команду /now: период от последнего ежедневного замера (~12:30) до текущего момента.
 export function formatNowMessage(r: Report): string {
   const lines: string[] = [];
-  lines.push("⚡️ <b>Спринт-отчёт</b>");
+  lines.push("⚡️ <b>Отчёт на сейчас</b>");
   if (r.isBaseline) {
     lines.push(`На ${fmtDateTime(r.periodEnd)} (время Джакарты)`);
     lines.push("");
@@ -87,7 +87,7 @@ export function formatNowMessage(r: Report): string {
   if (r.newReels.length > 0) {
     lines.push(`⚡️ Новые видео набрали: <b>${nf.format(newGain)}</b> просмотров`);
   }
-  lines.push(`▶️ Прирост просмотров за спринт: <b>${signed(r.totalGain)}</b>`);
+  lines.push(`▶️ Прирост с 12:30 вчера: <b>${signed(r.totalGain)}</b>`);
   lines.push(`👁 ТОТАЛ просмотров по ${nf.format(r.all.length)} рилсам: <b>${nf.format(r.totalViews)}</b>`);
   return lines.join("\n");
 }
