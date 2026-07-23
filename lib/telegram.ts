@@ -15,14 +15,19 @@ function threadId(): string | undefined {
   return process.env.TELEGRAM_THREAD_ID || undefined;
 }
 
-export async function sendMessage(html: string): Promise<void> {
-  const thread = threadId();
+export interface SendOptions {
+  /** Тема форума для ответа: число — конкретная тема, null — General, undefined — тема из env. */
+  thread?: number | null;
+}
+
+export async function sendMessage(html: string, opts?: SendOptions): Promise<void> {
+  const thread = opts && "thread" in opts ? opts.thread : threadId() ? Number(threadId()) : null;
   const res = await fetch(api("sendMessage"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       chat_id: chatId(),
-      ...(thread ? { message_thread_id: Number(thread) } : {}),
+      ...(thread ? { message_thread_id: thread } : {}),
       text: html,
       parse_mode: "HTML",
       link_preview_options: { is_disabled: true },

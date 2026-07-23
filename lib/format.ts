@@ -1,4 +1,4 @@
-import { Report } from "./types";
+import { Report, Snapshot } from "./types";
 
 const nf = new Intl.NumberFormat("ru-RU");
 
@@ -47,6 +47,48 @@ export function formatMessage(r: Report): string {
     lines.push(`👁 ТОТАЛ просмотров по ${nf.format(r.all.length)} рилсам: <b>${nf.format(r.totalViews)}</b>`);
   }
 
+  return lines.join("\n");
+}
+
+// Ответ на команду /info: общая статистика по аккаунту на текущий момент.
+export function formatInfoMessage(snap: Snapshot): string {
+  const lines: string[] = [];
+  lines.push("📈 <b>Общая статистика</b>");
+  lines.push(`На ${fmtDateTime(snap.takenAt)} (время Джакарты)`);
+  lines.push("");
+  lines.push(`🎬 Рилсов: <b>${nf.format(snap.reels.length)}</b>`);
+  const total = snap.reels.reduce((s, r) => s + r.views, 0);
+  lines.push(`👁 ТОТАЛ просмотров: <b>${nf.format(total)}</b>`);
+  if (snap.reels.length > 0) {
+    lines.push(`📊 В среднем на рилс: <b>${nf.format(Math.round(total / snap.reels.length))}</b>`);
+    const best = snap.reels.reduce((a, b) => (b.views > a.views ? b : a));
+    lines.push(`🏆 Лучший рилс: <b>${nf.format(best.views)}</b> — <a href="${best.permalink}">открыть</a>`);
+    const last = snap.reels.reduce((a, b) => (Date.parse(b.publishedAt) > Date.parse(a.publishedAt) ? b : a));
+    lines.push(`📅 Последняя публикация: ${fmtDateTime(last.publishedAt)}`);
+  }
+  return lines.join("\n");
+}
+
+// Ответ на команду /now: спринт от последнего ежедневного замера (~12:30) до текущего момента.
+export function formatNowMessage(r: Report): string {
+  const lines: string[] = [];
+  lines.push("⚡️ <b>Спринт-отчёт</b>");
+  if (r.isBaseline) {
+    lines.push(`На ${fmtDateTime(r.periodEnd)} (время Джакарты)`);
+    lines.push("");
+    lines.push(`👁 ТОТАЛ просмотров по ${nf.format(r.all.length)} рилсам: <b>${nf.format(r.totalViews)}</b>`);
+    lines.push("ℹ️ Базового замера ещё нет — прирост появится после первого ежедневного отчёта.");
+    return lines.join("\n");
+  }
+  lines.push(`С ${fmtDateTime(r.periodStart!)} по ${fmtDateTime(r.periodEnd)} (время Джакарты)`);
+  lines.push("");
+  const newGain = r.newReels.reduce((s, reel) => s + reel.gain, 0);
+  lines.push(`🆕 Выпущено видео: <b>${r.newReels.length}</b>`);
+  if (r.newReels.length > 0) {
+    lines.push(`⚡️ Новые видео набрали: <b>${nf.format(newGain)}</b> просмотров`);
+  }
+  lines.push(`▶️ Прирост просмотров за спринт: <b>${signed(r.totalGain)}</b>`);
+  lines.push(`👁 ТОТАЛ просмотров по ${nf.format(r.all.length)} рилсам: <b>${nf.format(r.totalViews)}</b>`);
   return lines.join("\n");
 }
 

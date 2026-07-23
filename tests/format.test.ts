@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatMessage, formatCsv, escapeHtml } from "../lib/format";
+import { formatMessage, formatCsv, formatInfoMessage, formatNowMessage, escapeHtml } from "../lib/format";
 import { computeReport } from "../lib/diff";
 import { ReelSnapshot, Snapshot } from "../lib/types";
 
@@ -62,6 +62,42 @@ describe("formatCsv", () => {
 
   it("quotes cells containing the delimiter", () => {
     expect(formatCsv(sampleReport())).not.toContain('""'); // sanity: no accidental quoting
+  });
+});
+
+describe("formatInfoMessage", () => {
+  it("shows totals, average, best reel link and last publication date", () => {
+    const snap: Snapshot = {
+      takenAt: T1,
+      reels: [reel("a", 100, "2026-07-01T00:00:00Z"), reel("n", 900, "2026-07-19T10:00:00Z")],
+    };
+    const msg = formatInfoMessage(snap);
+    expect(msg).toContain("Общая статистика");
+    expect(msg).toContain("Рилсов: <b>2</b>");
+    expect(msg).toContain(`ТОТАЛ просмотров: <b>${new Intl.NumberFormat("ru-RU").format(1000)}</b>`);
+    expect(msg).toContain("В среднем на рилс: <b>500</b>");
+    expect(msg).toContain('href="https://www.instagram.com/reel/n/"'); // best = 900 views
+    expect(msg).toContain("Последняя публикация");
+  });
+});
+
+describe("formatNowMessage", () => {
+  it("is a compact sprint report: period, videos published, gain, total", () => {
+    const msg = formatNowMessage(sampleReport());
+    expect(msg).toContain("Спринт-отчёт");
+    expect(msg).toContain("время Джакарты");
+    expect(msg).toContain("Выпущено видео: <b>1</b>");
+    expect(msg).toContain("Новые видео набрали: <b>900</b> просмотров");
+    expect(msg).toContain("Прирост просмотров за спринт: <b>+980</b>");
+    expect(msg).toContain("ТОТАЛ просмотров по 2 рилсам");
+    expect(msg).not.toContain("href=");
+  });
+
+  it("without a baseline shows totals and explains gain is unavailable", () => {
+    const curr: Snapshot = { takenAt: T1, reels: [reel("a", 100, "2026-07-01T00:00:00Z")] };
+    const msg = formatNowMessage(computeReport(curr, null));
+    expect(msg).toContain("Базового замера ещё нет");
+    expect(msg).not.toContain("Прирост");
   });
 });
 
