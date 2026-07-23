@@ -22,12 +22,21 @@ export function computeReport(current: Snapshot, prev: Snapshot | null): Report 
 
   const top = prev ? [...all].sort((a, b) => b.gain - a.gain).slice(0, 10) : [];
 
+  const followers =
+    current.followersCount != null
+      ? {
+          count: current.followersCount,
+          delta: prev?.followersCount != null ? current.followersCount - prev.followersCount : null,
+        }
+      : null;
+
   return {
     periodStart: prev?.takenAt ?? null,
     periodEnd: current.takenAt,
     isBaseline: !prev,
     totalViews: all.reduce((s, r) => s + r.views, 0),
     totalGain: all.reduce((s, r) => s + r.gain, 0),
+    followers,
     newReels,
     top,
     all,

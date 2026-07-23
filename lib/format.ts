@@ -1,4 +1,4 @@
-import { Report, Snapshot } from "./types";
+import { FollowerChanges, FollowerStats, Report, Snapshot } from "./types";
 
 const nf = new Intl.NumberFormat("ru-RU");
 
@@ -23,7 +23,16 @@ function signed(n: number): string {
   return (n > 0 ? "+" : "") + nf.format(n);
 }
 
-export function formatMessage(r: Report): string {
+function followersLine(f: FollowerStats, deltaLabel: string): string {
+  const base = `👥 Подписчиков: <b>${nf.format(f.count)}</b>`;
+  return f.delta === null ? base : `${base} (<b>${signed(f.delta)}</b> ${deltaLabel})`;
+}
+
+function followerChangesLine(c: FollowerChanges): string {
+  return `➕ Подписалось: <b>${nf.format(c.follows)}</b> · ➖ Отписалось: <b>${nf.format(c.unfollows)}</b> (за сутки, данные Instagram)`;
+}
+
+export function formatMessage(r: Report, changes?: FollowerChanges | null): string {
   const lines: string[] = [];
   lines.push("📊 <b>Отчёт по рилсам</b>");
   if (r.periodStart) {
@@ -47,6 +56,12 @@ export function formatMessage(r: Report): string {
     lines.push(`👁 ТОТАЛ просмотров по ${nf.format(r.all.length)} рилсам: <b>${nf.format(r.totalViews)}</b>`);
   }
 
+  if (r.followers) {
+    lines.push("");
+    lines.push(followersLine(r.followers, "за период"));
+    if (changes) lines.push(followerChangesLine(changes));
+  }
+
   return lines.join("\n");
 }
 
@@ -56,6 +71,9 @@ export function formatInfoMessage(snap: Snapshot): string {
   lines.push("📈 <b>Общая статистика</b>");
   lines.push(`На ${fmtDateTime(snap.takenAt)} (время Джакарты)`);
   lines.push("");
+  if (snap.followersCount != null) {
+    lines.push(`👥 Подписчиков: <b>${nf.format(snap.followersCount)}</b>`);
+  }
   lines.push(`🎬 Рилсов: <b>${nf.format(snap.reels.length)}</b>`);
   const total = snap.reels.reduce((s, r) => s + r.views, 0);
   lines.push(`👁 ТОТАЛ просмотров: <b>${nf.format(total)}</b>`);
@@ -89,6 +107,9 @@ export function formatNowMessage(r: Report): string {
   }
   lines.push(`▶️ Прирост с 12:30 вчера: <b>${signed(r.totalGain)}</b>`);
   lines.push(`👁 ТОТАЛ просмотров по ${nf.format(r.all.length)} рилсам: <b>${nf.format(r.totalViews)}</b>`);
+  if (r.followers) {
+    lines.push(followersLine(r.followers, "с 12:30 вчера"));
+  }
   return lines.join("\n");
 }
 

@@ -37,6 +37,22 @@ describe("formatMessage", () => {
     expect(msg).not.toContain("href=");
   });
 
+  it("shows followers count, net delta and gross follows/unfollows when available", () => {
+    const prev: Snapshot = { takenAt: T0, followersCount: 15000, reels: [reel("a", 100, "2026-07-01T00:00:00Z")] };
+    const curr: Snapshot = { takenAt: T1, followersCount: 16332, reels: [reel("a", 180, "2026-07-01T00:00:00Z")] };
+    const msg = formatMessage(computeReport(curr, prev), { follows: 1517, unfollows: 55 });
+    const nf = new Intl.NumberFormat("ru-RU");
+    expect(msg).toContain(`Подписчиков: <b>${nf.format(16332)}</b> (<b>+${nf.format(1332)}</b> за период)`);
+    expect(msg).toContain(`Подписалось: <b>${nf.format(1517)}</b>`);
+    expect(msg).toContain("Отписалось: <b>55</b>");
+  });
+
+  it("omits follower lines when follower data is unavailable", () => {
+    const msg = formatMessage(sampleReport(), null);
+    expect(msg).not.toContain("Подписчиков");
+    expect(msg).not.toContain("Подписалось");
+  });
+
   it("baseline report has first-measurement wording and no gain lines", () => {
     const curr: Snapshot = { takenAt: T1, reels: [reel("a", 100, "2026-07-01T00:00:00Z")] };
     const msg = formatMessage(computeReport(curr, null));
@@ -73,11 +89,19 @@ describe("formatInfoMessage", () => {
     };
     const msg = formatInfoMessage(snap);
     expect(msg).toContain("Общая статистика");
+    expect(msg).not.toContain("Подписчиков"); // нет данных — нет строки
     expect(msg).toContain("Рилсов: <b>2</b>");
     expect(msg).toContain(`ТОТАЛ просмотров: <b>${new Intl.NumberFormat("ru-RU").format(1000)}</b>`);
     expect(msg).toContain("В среднем на рилс: <b>500</b>");
     expect(msg).toContain('href="https://www.instagram.com/reel/n/"'); // best = 900 views
     expect(msg).toContain("Последняя публикация");
+  });
+
+  it("shows followers count when present in the snapshot", () => {
+    const snap: Snapshot = { takenAt: T1, followersCount: 16332, reels: [] };
+    expect(formatInfoMessage(snap)).toContain(
+      `Подписчиков: <b>${new Intl.NumberFormat("ru-RU").format(16332)}</b>`
+    );
   });
 });
 
@@ -91,6 +115,14 @@ describe("formatNowMessage", () => {
     expect(msg).toContain("Прирост с 12:30 вчера: <b>+980</b>");
     expect(msg).toContain("ТОТАЛ просмотров по 2 рилсам");
     expect(msg).not.toContain("href=");
+  });
+
+  it("shows followers with net delta since yesterday's snapshot", () => {
+    const prev: Snapshot = { takenAt: T0, followersCount: 15000, reels: [reel("a", 100, "2026-07-01T00:00:00Z")] };
+    const curr: Snapshot = { takenAt: T1, followersCount: 16332, reels: [reel("a", 180, "2026-07-01T00:00:00Z")] };
+    const msg = formatNowMessage(computeReport(curr, prev));
+    const nf = new Intl.NumberFormat("ru-RU");
+    expect(msg).toContain(`Подписчиков: <b>${nf.format(16332)}</b> (<b>+${nf.format(1332)}</b> с 12:30 вчера)`);
   });
 
   it("without a baseline shows totals and explains gain is unavailable", () => {

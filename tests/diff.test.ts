@@ -79,6 +79,24 @@ describe("computeReport", () => {
     expect(r.top[1].id).toBe("r10");
   });
 
+  it("computes followers count and net delta vs previous snapshot", () => {
+    const prev: Snapshot = { takenAt: T0, followersCount: 15000, reels: [] };
+    const curr: Snapshot = { takenAt: T1, followersCount: 16332, reels: [] };
+    const r = computeReport(curr, prev);
+    expect(r.followers).toEqual({ count: 16332, delta: 1332 });
+  });
+
+  it("followers delta is null when prev snapshot has no followers count (old format)", () => {
+    const prev: Snapshot = { takenAt: T0, reels: [] };
+    const curr: Snapshot = { takenAt: T1, followersCount: 16332, reels: [] };
+    expect(computeReport(curr, prev).followers).toEqual({ count: 16332, delta: null });
+  });
+
+  it("followers is null when the current snapshot has no followers count", () => {
+    const curr: Snapshot = { takenAt: T1, reels: [] };
+    expect(computeReport(curr, null).followers).toBeNull();
+  });
+
   it("new reels are sorted newest first", () => {
     const prev: Snapshot = { takenAt: T0, reels: [] };
     const curr: Snapshot = {

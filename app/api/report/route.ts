@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { computeReport } from "../../../lib/diff";
 import { escapeHtml, formatCsv, formatMessage } from "../../../lib/format";
-import { fetchAllReels, fetchViews } from "../../../lib/instagram";
+import {
+  fetchAllReels,
+  fetchFollowersCount,
+  fetchFollowsAndUnfollows,
+  fetchViews,
+} from "../../../lib/instagram";
 import {
   jakartaDateKey,
   loadLastReportKey,
@@ -37,6 +42,8 @@ export async function GET(req: NextRequest) {
 
     const media = await fetchAllReels(process.env.IG_USER_ID, token);
     const views = await fetchViews(token, media.map((m) => m.id));
+    const followersCount = await fetchFollowersCount(process.env.IG_USER_ID, token);
+    const followerChanges = await fetchFollowsAndUnfollows(process.env.IG_USER_ID, token);
 
     const now = new Date();
     const todayKey = jakartaDateKey(now);
@@ -46,6 +53,7 @@ export async function GET(req: NextRequest) {
 
     const current: Snapshot = {
       takenAt: now.toISOString(),
+      ...(followersCount != null ? { followersCount } : {}),
       reels: media.map((m) => ({
         id: m.id,
         permalink: m.permalink,
@@ -58,7 +66,7 @@ export async function GET(req: NextRequest) {
     await saveSnapshot(todayKey, current);
 
     const report = computeReport(current, prev);
-    await sendMessage(formatMessage(report));
+    await sendMessage(formatMessage(report, followerChanges));
     await sendDocument(
       `reels-${todayKey}.csv`,
       formatCsv(report),
@@ -71,6 +79,7 @@ export async function GET(req: NextRequest) {
       reels: current.reels.length,
       newReels: report.newReels.length,
       totalGain: report.totalGain,
+      followers: followersCount,
     });
   } catch (e) {
     console.error("report failed:", e);

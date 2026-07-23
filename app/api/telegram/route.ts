@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { computeReport } from "../../../lib/diff";
 import { escapeHtml, formatInfoMessage, formatNowMessage } from "../../../lib/format";
-import { fetchAllReels, fetchViews } from "../../../lib/instagram";
+import { fetchAllReels, fetchFollowersCount, fetchViews } from "../../../lib/instagram";
 import { jakartaDateKey, loadPreviousSnapshot } from "../../../lib/storage";
 import { sendMessage, SendOptions } from "../../../lib/telegram";
 import { resolveToken } from "../../../lib/token";
@@ -31,8 +31,10 @@ async function takeLiveSnapshot(): Promise<Snapshot> {
   const token = await resolveToken();
   const media = await fetchAllReels(igUserId, token);
   const views = await fetchViews(token, media.map((m) => m.id));
+  const followersCount = await fetchFollowersCount(igUserId, token);
   return {
     takenAt: new Date().toISOString(),
+    ...(followersCount != null ? { followersCount } : {}),
     reels: media.map((m) => ({
       id: m.id,
       permalink: m.permalink,

@@ -1,3 +1,5 @@
+import { FollowerChanges } from "./types";
+
 const G = "https://graph.instagram.com";
 
 export interface IgMedia {
@@ -68,6 +70,61 @@ export async function fetchViews(token: string, mediaIds: string[]): Promise<Map
   const workers = Array.from({ length: Math.min(INSIGHTS_CONCURRENCY, mediaIds.length) }, worker);
   await Promise.all(workers);
   return views;
+}
+
+// Текущее число подписчиков. Ошибка не роняет отчёт — просто не будет строки про подписчиков.
+export async function fetchFollowersCount(igUserId: string, token: string): Promise<number | null> {
+  try {
+    const res = await fetch(
+      `${G}/${igUserId}?fields=followers_count&access_token=${encodeURIComponent(token)}`
+    );
+    if (!res.ok) {
+      console.error(`followers_count failed: ${res.status} ${await res.text()}`);
+      return null;
+    }
+    const data: { followers_count?: number } = await res.json();
+    return typeof data.followers_count === "number" ? data.followers_count : null;
+  } catch (e) {
+    console.error("followers_count error:", e);
+    return null;
+  }
+}
+
+// Сколько подписалось и отписалось по данным Instagram. Свежие сутки Instagram
+// досчитывает с задержкой, поэтому берём окно в 2 дня: API возвращает суммы по
+// последнему полностью посчитанному дню. Пустой ответ (данных ещё нет) => null.
+export async function fetchFollowsAndUnfollows(
+  igUserId: string,
+  token: string
+): Promise<FollowerChanges | null> {
+  try {
+    const until = Math.floor(Date.now() / 1000);
+    const since = until - 2 * 24 * 3600;
+    const res = await fetch(
+      `${G}/${igUserId}/insights?metric=follows_and_unfollows&period=day&metric_type=total_value&breakdown=follow_type&since=${since}&until=${until}&access_token=${encodeURIComponent(token)}`
+    );
+    if (!res.ok) {
+      console.error(`follows_and_unfollows failed: ${res.status} ${await res.text()}`);
+      return null;
+    }
+    const data: {
+      data?: Array<{
+        total_value?: {
+          breakdowns?: Array<{
+            results?: Array<{ dimension_values?: string[]; value?: number }>;
+          }>;
+        };
+      }>;
+    } = await res.json();
+    const results = data.data?.[0]?.total_value?.breakdowns?.[0]?.results;
+    if (!results || results.length === 0) return null;
+    const byType = (t: string) =>
+      results.find((r) => r.dimension_values?.includes(t))?.value ?? 0;
+    return { follows: byType("FOLLOWER"), unfollows: byType("NON_FOLLOWER") };
+  } catch (e) {
+    console.error("follows_and_unfollows error:", e);
+    return null;
+  }
 }
 
 export async function refreshLongLivedToken(token: string): Promise<string> {

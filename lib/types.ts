@@ -10,7 +10,21 @@ export interface ReelSnapshot {
 export interface Snapshot {
   /** ISO timestamp when the snapshot was taken */
   takenAt: string;
+  /** Followers at snapshot time (absent in snapshots taken before this field existed) */
+  followersCount?: number;
   reels: ReelSnapshot[];
+}
+
+export interface FollowerStats {
+  count: number;
+  /** Net change vs previous snapshot; null when prev has no followersCount */
+  delta: number | null;
+}
+
+/** Gross follows/unfollows as reported by Instagram insights */
+export interface FollowerChanges {
+  follows: number;
+  unfollows: number;
 }
 
 export interface ReelReport extends ReelSnapshot {
@@ -24,6 +38,7 @@ export interface Report {
   isBaseline: boolean;
   totalViews: number;
   totalGain: number;
+  followers: FollowerStats | null;
   newReels: ReelReport[];
   top: ReelReport[];
   all: ReelReport[];
