@@ -190,13 +190,10 @@ curl -H "Authorization: Bearer a1b2c3d4e5f6..." \
 
 Бот отвечает в ту же тему (вкладку) группы, где написана команда. Данные берутся из Instagram в момент запроса — ответ может занять несколько секунд.
 
-Команды работают через Telegram-webhook. После первого деплоя (или смены домена) webhook нужно зарегистрировать один раз:
+Команды работают через Telegram-webhook. После первого деплоя (или смены домена) webhook нужно зарегистрировать один раз — бот настроит его сам:
 
 ```bash
-curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
-  -d "url=https://<ваш-домен>/api/telegram" \
-  -d "secret_token=<CRON_SECRET>" \
-  -d 'allowed_updates=["message"]'
+curl "https://<ваш-домен>/api/telegram" -H "Authorization: Bearer <CRON_SECRET>"
 ```
 
 ---

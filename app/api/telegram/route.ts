@@ -60,6 +60,39 @@ async function handleCommand(cmd: string, opts: SendOptions): Promise<void> {
   }
 }
 
+// Одноразовая настройка: регистрирует webhook и меню команд у Telegram.
+// Вызывается вручную с секретом крона: GET /api/telegram с Authorization: Bearer <CRON_SECRET>.
+export async function GET(req: NextRequest) {
+  const secret = process.env.CRON_SECRET;
+  if (!secret || req.headers.get("authorization") !== `Bearer ${secret}`) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  if (!botToken) return NextResponse.json({ error: "TELEGRAM_BOT_TOKEN is not set" }, { status: 500 });
+
+  const host = req.headers.get("x-forwarded-host") ?? req.nextUrl.host;
+  const webhook = await fetch(`https://api.telegram.org/bot${botToken}/setWebhook`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      url: `https://${host}/api/telegram`,
+      secret_token: secret,
+      allowed_updates: ["message"],
+    }),
+  });
+  const commands = await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      commands: [
+        { command: "now", description: "Спринт-отчёт: с последнего замера 12:30 по сейчас" },
+        { command: "info", description: "Общая статистика по всем рилсам" },
+      ],
+    }),
+  });
+  return NextResponse.json({ webhook: await webhook.json(), commands: await commands.json() });
+}
+
 export async function POST(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
   if (!secret || req.headers.get("x-telegram-bot-api-secret-token") !== secret) {
