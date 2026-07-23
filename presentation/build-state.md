@@ -117,3 +117,14 @@ https://www.figma.com/design/JUoeV6UT1Z4LTJ36vKhMms — копия «Pitch Deck 
 - 11 Данные: «обработка и трансграничное хранение — в соответствии с UU PDP № 27/2022».
 Остаточные intro-сжатия (не факты, под решение): 02 «в крупнейшей мусульманской стране»,
 12 «Galamat Group — казахстанская медиа- и тех. группа», 12б «Флагманское потребительское приложение…».
+
+## Бахаса-версия (2026-07-24)
+- Создана страница «Pitch Deck (Bahasa)» — клон всех 20 фреймов; русская страница «Pitch Deck» сохранена как эталон.
+- Слайд 13 (юр. сведения) был утерян из файла ранее — восстановлен заново и на обеих страницах.
+- Весь текст переведён на Indonesian. Латиница-термины (Mushaf Standar Indonesia, Tanda Tashih, LPMQ,
+  Kemenag, UU PDP, pembina, sedekah jariyah, Jumat Bersih, Gerakan Separuh Iman, fastabiqul khairat,
+  Umat yang Membaca, NU, Muhammadiyah, Persis, Al Washliyah, MTQ, wadah musyawarah, Dana Abadi Literasi
+  Al-Quran, Rumah/Sekolah/Academy Qurany и т.д.) оставлены как есть; аяты/хадисы транслитерированы
+  (al-‘Alaq 96:1, Sahih Muslim/al-Bukhari), ﷺ — шрифтом Amiri.
+- Термины исламские: ИСТИКАМА→ISTIQAMAH, ТАХАРА→THAHARAH, УХУВВА→UKHUWAH, Мухсин→Muhsin/Muhsinin.
+- После перевода прогнан авто-фит + вертикальное центрирование; заголовок 02 и финал 16 поправлены под новую длину.
