@@ -1,0 +1,10 @@
+# Рабочие материалы деки и локальные data-артефакты — не часть рантайма бота.
+# Next.js обслуживает только app/ и lib/.
+presentation/
+comments-all.jsonl
+reels-meta.json
+halal-result.json
+halal-scan.mjs
+halal-scan.log
+dump-comments.mjs
+dump-comments.log
