@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { computeReport } from "../../../lib/diff";
-import { escapeHtml, formatInfoMessage, formatNowMessage } from "../../../lib/format";
+import { escapeHtml, formatCsv, formatInfoMessage, formatNowMessage } from "../../../lib/format";
 import { fetchAllReels, fetchFollowersCount, fetchViews } from "../../../lib/instagram";
 import { jakartaDateKey, loadPreviousSnapshot } from "../../../lib/storage";
-import { sendMessage, SendOptions } from "../../../lib/telegram";
+import { sendDocument, sendMessage, SendOptions } from "../../../lib/telegram";
 import { resolveToken } from "../../../lib/token";
 import { Snapshot } from "../../../lib/types";
 
@@ -21,6 +21,7 @@ interface TelegramUpdate {
 const HELP =
   "Команды:\n" +
   "/now — отчёт с 12:30 вчера по текущий момент\n" +
+  "/otchet — таблица (CSV) по всем рилсам с приростом\n" +
   "/info — общая статистика по всем рилсам";
 
 // Живой замер: список рилсов + актуальные просмотры. Снапшот НЕ сохраняем,
@@ -60,6 +61,19 @@ async function handleCommand(cmd: string, opts: SendOptions): Promise<void> {
     await sendMessage(formatNowMessage(computeReport(current, prev)), opts);
     return;
   }
+  if (cmd === "/otchet") {
+    const current = await takeLiveSnapshot();
+    const key = jakartaDateKey(new Date());
+    const prev = await loadPreviousSnapshot(key);
+    const report = computeReport(current, prev);
+    await sendDocument(
+      `reels-${key}.csv`,
+      formatCsv(report),
+      "Таблица: все рилсы со ссылками, отсортированы по приросту. Строки 1–10 = ТОП-10 🏆",
+      opts
+    );
+    return;
+  }
 }
 
 // Одноразовая настройка: регистрирует webhook и меню команд у Telegram.
@@ -88,6 +102,7 @@ export async function GET(req: NextRequest) {
     body: JSON.stringify({
       commands: [
         { command: "now", description: "Отчёт с 12:30 вчера по сейчас" },
+        { command: "otchet", description: "Таблица (CSV) по всем рилсам" },
         { command: "info", description: "Общая статистика по всем рилсам" },
       ],
     }),

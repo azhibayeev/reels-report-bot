@@ -38,11 +38,16 @@ export async function sendMessage(html: string, opts?: SendOptions): Promise<voi
   }
 }
 
-export async function sendDocument(filename: string, content: string, caption?: string): Promise<void> {
+export async function sendDocument(
+  filename: string,
+  content: string,
+  caption?: string,
+  opts?: SendOptions
+): Promise<void> {
   const form = new FormData();
   form.append("chat_id", chatId());
-  const thread = threadId();
-  if (thread) form.append("message_thread_id", thread);
+  const thread = opts && "thread" in opts ? opts.thread : threadId() ? Number(threadId()) : null;
+  if (thread) form.append("message_thread_id", String(thread));
   if (caption) form.append("caption", caption);
   form.append("document", new Blob([content], { type: "text/csv" }), filename);
   const res = await fetch(api("sendDocument"), { method: "POST", body: form });

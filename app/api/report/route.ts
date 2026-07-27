@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { computeReport } from "../../../lib/diff";
-import { escapeHtml, formatCsv, formatMessage } from "../../../lib/format";
+import { escapeHtml, formatMessage } from "../../../lib/format";
 import {
   fetchAllReels,
   fetchFollowersCount,
@@ -14,7 +14,7 @@ import {
   saveLastReportKey,
   saveSnapshot,
 } from "../../../lib/storage";
-import { sendDocument, sendMessage } from "../../../lib/telegram";
+import { sendMessage } from "../../../lib/telegram";
 import { resolveToken } from "../../../lib/token";
 import { Snapshot } from "../../../lib/types";
 
@@ -43,11 +43,19 @@ export async function GET(req: NextRequest) {
     const media = await fetchAllReels(process.env.IG_USER_ID, token);
     const views = await fetchViews(token, media.map((m) => m.id));
     const followersCount = await fetchFollowersCount(process.env.IG_USER_ID, token);
-    const followerChanges = await fetchFollowsAndUnfollows(process.env.IG_USER_ID, token);
 
     const now = new Date();
     const todayKey = jakartaDateKey(now);
     const prev = await loadPreviousSnapshot(todayKey);
+
+    // Окно follows/unfollows = период отчёта (от прошлого замера до текущего),
+    // чтобы валовые цифры относились к тому же промежутку, что и чистый прирост.
+    const followerChanges = await fetchFollowsAndUnfollows(
+      process.env.IG_USER_ID,
+      token,
+      prev ? Date.parse(prev.takenAt) : undefined,
+      now.getTime()
+    );
 
     const prevViews = new Map((prev?.reels ?? []).map((r) => [r.id, r.views]));
 
@@ -67,11 +75,6 @@ export async function GET(req: NextRequest) {
 
     const report = computeReport(current, prev);
     await sendMessage(formatMessage(report, followerChanges));
-    await sendDocument(
-      `reels-${todayKey}.csv`,
-      formatCsv(report),
-      "Таблица: все рилсы со ссылками, отсортированы по приросту. Строки 1–10 = ТОП-10 🏆"
-    );
     await saveLastReportKey(todayKey);
 
     return NextResponse.json({

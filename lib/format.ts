@@ -29,7 +29,7 @@ function followersLine(f: FollowerStats, deltaLabel: string): string {
 }
 
 function followerChangesLine(c: FollowerChanges): string {
-  return `➕ Подписалось: <b>${nf.format(c.follows)}</b> · ➖ Отписалось: <b>${nf.format(c.unfollows)}</b> (за сутки, данные Instagram)`;
+  return `➕ Подписалось: <b>${nf.format(c.follows)}</b> · ➖ Отписалось: <b>${nf.format(c.unfollows)}</b> (валовые данные Instagram за период; их разница может не совпадать с чистым приростом выше)`;
 }
 
 export function formatMessage(r: Report, changes?: FollowerChanges | null): string {

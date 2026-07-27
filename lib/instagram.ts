@@ -90,16 +90,21 @@ export async function fetchFollowersCount(igUserId: string, token: string): Prom
   }
 }
 
-// Сколько подписалось и отписалось по данным Instagram. Свежие сутки Instagram
-// досчитывает с задержкой, поэтому берём окно в 2 дня: API возвращает суммы по
-// последнему полностью посчитанному дню. Пустой ответ (данных ещё нет) => null.
+// Сколько подписалось и отписалось по данным Instagram (валовые числа).
+// sinceMs/untilMs — окно отчёта: передаём период между замерами, чтобы цифры
+// относились к тому же промежутку, что и чистый прирост. Без аргументов — окно
+// в 2 дня (свежие сутки Instagram досчитывает с задержкой). Важно: это отдельная
+// метрика IG, её разница НЕ обязана совпадать с изменением followers_count.
+// Пустой ответ (данных ещё нет) => null.
 export async function fetchFollowsAndUnfollows(
   igUserId: string,
-  token: string
+  token: string,
+  sinceMs?: number,
+  untilMs?: number
 ): Promise<FollowerChanges | null> {
   try {
-    const until = Math.floor(Date.now() / 1000);
-    const since = until - 2 * 24 * 3600;
+    const until = Math.floor((untilMs ?? Date.now()) / 1000);
+    const since = sinceMs != null ? Math.floor(sinceMs / 1000) : until - 2 * 24 * 3600;
     const res = await fetch(
       `${G}/${igUserId}/insights?metric=follows_and_unfollows&period=day&metric_type=total_value&breakdown=follow_type&since=${since}&until=${until}&access_token=${encodeURIComponent(token)}`
     );
