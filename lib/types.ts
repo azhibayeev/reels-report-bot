@@ -43,3 +43,11 @@ export interface Report {
   top: ReelReport[];
   all: ReelReport[];
 }
+
+/** Одна точка суточного ряда для графика динамики */
+export interface DayPoint {
+  /** Ключ дня в формате YYYY-MM-DD */
+  date: string;
+  /** Значение за этот день (прирост просмотров или заходы) */
+  value: number;
+}
