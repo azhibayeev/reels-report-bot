@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { buildTrendChart, computeDailyViewGains, renderChartPng } from "../../../lib/chart";
 import { computeReport } from "../../../lib/diff";
 import { escapeHtml, formatClicksMessage, formatMessage } from "../../../lib/format";
-import { getClicksStats, lastSprintStart } from "../../../lib/posthog";
+import { getClicksStats, getDailyClicks, lastSprintStart } from "../../../lib/posthog";
 import {
   fetchAllReels,
   fetchFollowersCount,
@@ -12,10 +13,11 @@ import {
   jakartaDateKey,
   loadLastReportKey,
   loadPreviousSnapshot,
+  loadRecentSnapshots,
   saveLastReportKey,
   saveSnapshot,
 } from "../../../lib/storage";
-import { sendMessage } from "../../../lib/telegram";
+import { sendMessage, sendPhoto } from "../../../lib/telegram";
 import { resolveToken } from "../../../lib/token";
 import { Snapshot } from "../../../lib/types";
 
@@ -89,6 +91,21 @@ export async function GET(req: NextRequest) {
       await sendMessage(formatClicksMessage(clicks, "Заходы по ссылкам · за сутки"));
     } catch (e) {
       console.error("clicks report failed:", e);
+    }
+
+    // График динамики (просмотры/день + заходы/день) за 14 дней → тема Daily.
+    // Изолирован: любая ошибка (QuickChart/PostHog/мало данных) не роняет отчёт.
+    try {
+      const snaps = await loadRecentSnapshots(15); // 15 снапшотов → до 14 приростов
+      const viewsSeries = computeDailyViewGains(snaps).slice(-14);
+      const clicksSince = Math.floor((now.getTime() - 14 * 86_400_000) / 1000);
+      const clicksSeries = await getDailyClicks(clicksSince);
+      if (viewsSeries.length >= 2 || clicksSeries.length >= 2) {
+        const png = await renderChartPng(buildTrendChart(viewsSeries, clicksSeries));
+        await sendPhoto(png, "📈 Динамика за 14 дней");
+      }
+    } catch (e) {
+      console.error("trend chart failed:", e);
     }
 
     return NextResponse.json({
