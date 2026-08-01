@@ -17,3 +17,62 @@ export function computeDailyViewGains(snaps: Snapshot[]): DayPoint[] {
   }
   return out;
 }
+
+// Метка дня YYYY-MM-DD → dd.mm
+function ddmm(dateKey: string): string {
+  const [, m, d] = dateKey.split("-");
+  return `${d}.${m}`;
+}
+
+// Значения серии, выровненные по общему списку дат (нет точки → null для разрыва линии).
+function align(dates: string[], series: DayPoint[]): (number | null)[] {
+  const by = new Map(series.map((p) => [p.date, p.value]));
+  return dates.map((d) => (by.has(d) ? (by.get(d) as number) : null));
+}
+
+// Конфиг Chart.js для QuickChart: две линии (просмотры/заходы) на двух шкалах.
+export function buildTrendChart(views: DayPoint[], clicks: DayPoint[]): Record<string, unknown> {
+  const dates = Array.from(new Set([...views, ...clicks].map((p) => p.date))).sort();
+  return {
+    type: "line",
+    data: {
+      labels: dates.map(ddmm),
+      datasets: [
+        {
+          label: "Просмотры за день",
+          data: align(dates, views),
+          yAxisID: "y",
+          borderColor: "#2563eb",
+          backgroundColor: "#2563eb",
+          tension: 0.3,
+          spanGaps: true,
+        },
+        {
+          label: "Заходы за день",
+          data: align(dates, clicks),
+          yAxisID: "y1",
+          borderColor: "#f59e0b",
+          backgroundColor: "#f59e0b",
+          tension: 0.3,
+          spanGaps: true,
+        },
+      ],
+    },
+    options: {
+      plugins: {
+        title: { display: true, text: "Динамика за 14 дней" },
+        legend: { position: "top" },
+      },
+      scales: {
+        y: { type: "linear", position: "left", beginAtZero: true, title: { display: true, text: "Просмотры/день" } },
+        y1: {
+          type: "linear",
+          position: "right",
+          beginAtZero: true,
+          grid: { drawOnChartArea: false },
+          title: { display: true, text: "Заходы/день" },
+        },
+      },
+    },
+  };
+}
