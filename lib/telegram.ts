@@ -55,3 +55,19 @@ export async function sendDocument(
     throw new Error(`Telegram sendDocument failed (${res.status}): ${await res.text()}`);
   }
 }
+
+export async function sendPhoto(png: Buffer, caption?: string, opts?: SendOptions): Promise<void> {
+  const form = new FormData();
+  form.append("chat_id", chatId());
+  const thread = opts && "thread" in opts ? opts.thread : threadId() ? Number(threadId()) : null;
+  if (thread) form.append("message_thread_id", String(thread));
+  if (caption) {
+    form.append("caption", caption);
+    form.append("parse_mode", "HTML");
+  }
+  form.append("photo", new Blob([new Uint8Array(png)], { type: "image/png" }), "chart.png");
+  const res = await fetch(api("sendPhoto"), { method: "POST", body: form });
+  if (!res.ok) {
+    throw new Error(`Telegram sendPhoto failed (${res.status}): ${await res.text()}`);
+  }
+}

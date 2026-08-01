@@ -76,3 +76,21 @@ export function buildTrendChart(views: DayPoint[], clicks: DayPoint[]): Record<s
     },
   };
 }
+
+// Рендер конфига Chart.js в PNG через QuickChart. Возвращает байты картинки.
+export async function renderChartPng(config: Record<string, unknown>): Promise<Buffer> {
+  const res = await fetch("https://quickchart.io/chart", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chart: config,
+      width: 900,
+      height: 500,
+      backgroundColor: "white",
+      format: "png",
+      devicePixelRatio: 2,
+    }),
+  });
+  if (!res.ok) throw new Error(`QuickChart failed (${res.status}): ${await res.text()}`);
+  return Buffer.from(await res.arrayBuffer());
+}

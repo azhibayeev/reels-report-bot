@@ -36,6 +36,20 @@ export async function loadPreviousSnapshot(todayKey: string): Promise<Snapshot |
   return (await res.json()) as Snapshot;
 }
 
+// Последние `limit` снапшотов по возрастанию даты (для рядов динамики).
+export async function loadRecentSnapshots(limit: number): Promise<Snapshot[]> {
+  const { blobs } = await list({ prefix: SNAP_PREFIX });
+  const recent = blobs
+    .sort((a, b) => (a.pathname < b.pathname ? -1 : 1)) // по возрастанию даты в имени
+    .slice(-limit);
+  const snaps: Snapshot[] = [];
+  for (const b of recent) {
+    const res = await fetch(`${b.url}?ts=${Date.now()}`, { cache: "no-store" });
+    if (res.ok) snaps.push((await res.json()) as Snapshot);
+  }
+  return snaps;
+}
+
 const LAST_REPORT_PATH = "state/last-report.json";
 
 // Ключ дня, за который отчёт уже отправлен, — защита от дублей,
