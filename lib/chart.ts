@@ -84,6 +84,9 @@ export async function renderChartPng(config: Record<string, unknown>): Promise<B
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       chart: config,
+      // Конфиг в синтаксисе Chart.js v3/v4 (шкалы с ключами y/y1). QuickChart по
+      // умолчанию рендерит v2.9.4 и отвергает такой конфиг (HTTP 400) — явно просим v4.
+      version: "4",
       width: 900,
       height: 500,
       backgroundColor: "white",

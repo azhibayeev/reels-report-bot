@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { computeDailyViewGains, buildTrendChart } from "../lib/chart";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { computeDailyViewGains, buildTrendChart, renderChartPng } from "../lib/chart";
 import { Snapshot } from "../lib/types";
 
 function snap(takenAt: string, ...views: number[]): Snapshot {
@@ -52,5 +52,31 @@ describe("buildTrendChart", () => {
     expect(cfg.data.datasets[1].data).toEqual([null, 5]);
     expect(cfg.options.scales.y.position).toBe("left");
     expect(cfg.options.scales.y1.position).toBe("right");
+  });
+});
+
+describe("renderChartPng", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("requests QuickChart with Chart.js version 4 (config uses v3/v4 scale syntax)", async () => {
+    let sentUrl = "";
+    let sentBody = "";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: any) => {
+        sentUrl = String(url);
+        sentBody = init.body as string;
+        return { ok: true, arrayBuffer: async () => new Uint8Array([137, 80, 78, 71]).buffer } as any;
+      })
+    );
+
+    const png = await renderChartPng(
+      buildTrendChart([{ date: "2026-07-20", value: 1 }], [{ date: "2026-07-21", value: 2 }])
+    );
+
+    expect(sentUrl).toContain("quickchart.io/chart");
+    const body = JSON.parse(sentBody);
+    expect(body.version).toBe("4");
+    expect(Buffer.isBuffer(png)).toBe(true);
   });
 });
