@@ -1,3 +1,4 @@
+import type { ClicksStats } from "./posthog";
 import { FollowerChanges, FollowerStats, Report, Snapshot } from "./types";
 
 const nf = new Intl.NumberFormat("ru-RU");
@@ -110,6 +111,38 @@ export function formatNowMessage(r: Report): string {
   if (r.followers) {
     lines.push(followersLine(r.followers, "с 12:30 вчера"));
   }
+  return lines.join("\n");
+}
+
+// Сводка заходов по ссылкам. Метрика — уникальные люди. title/период задаёт вызывающий.
+export function formatClicksMessage(s: ClicksStats, title: string): string {
+  const now = new Date();
+  const period =
+    s.sinceEpoch <= 0
+      ? "За всё время"
+      : `С ${fmtDateTime(new Date(s.sinceEpoch * 1000).toISOString())} по ${fmtDateTime(now.toISOString())} (Джакарта)`;
+
+  // источники категории с уник. > 0, по убыванию, в строку «name — N»
+  const inline = (cat: string): string =>
+    s.sources
+      .filter((x) => x.category === cat && x.uniq > 0)
+      .sort((a, b) => b.uniq - a.uniq)
+      .map((x) => `${escapeHtml(x.name)} — <b>${nf.format(x.uniq)}</b>`)
+      .join(" · ");
+
+  const lines: string[] = [`📊 <b>${title}</b>`, period, ""];
+
+  const bio = inline("bio");
+  const inf = inline("inf");
+  const other = inline("other");
+  const direct = s.sources.filter((x) => x.category === "direct" && x.uniq > 0).reduce((sum, x) => sum + x.uniq, 0);
+
+  if (bio) lines.push(`<b>Шапки:</b> ${bio}`);
+  if (inf) lines.push(`<b>Инфлюенсеры:</b> ${inf}`);
+  if (direct) lines.push(`<b>Прямые:</b> <b>${nf.format(direct)}</b>`);
+  if (other) lines.push(`<b>Другое:</b> ${other}`);
+  if (!bio && !inf && !direct && !other) lines.push("Пока нет заходов за период.");
+
   return lines.join("\n");
 }
 

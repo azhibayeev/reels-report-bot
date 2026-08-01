@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { computeReport } from "../../../lib/diff";
-import { escapeHtml, formatCsv, formatInfoMessage, formatNowMessage } from "../../../lib/format";
+import { escapeHtml, formatClicksMessage, formatCsv, formatInfoMessage, formatNowMessage } from "../../../lib/format";
 import { fetchAllReels, fetchFollowersCount, fetchViews } from "../../../lib/instagram";
+import { getClicksStats, lastSprintStart } from "../../../lib/posthog";
 import { jakartaDateKey, loadPreviousSnapshot } from "../../../lib/storage";
 import { sendDocument, sendMessage, SendOptions } from "../../../lib/telegram";
 import { resolveToken } from "../../../lib/token";
@@ -22,7 +23,9 @@ const HELP =
   "Команды:\n" +
   "/now — отчёт с 12:30 вчера по текущий момент\n" +
   "/otchet — таблица (CSV) по всем рилсам с приростом\n" +
-  "/info — общая статистика по всем рилсам";
+  "/info — общая статистика по всем рилсам\n" +
+  "/kliki — заходы по ссылкам за спринт (с 12:30)\n" +
+  "/klikitotal — заходы по ссылкам за всё время";
 
 // Живой замер: список рилсов + актуальные просмотры. Снапшот НЕ сохраняем,
 // чтобы не сдвигать базу ежедневного отчёта.
@@ -49,6 +52,26 @@ async function takeLiveSnapshot(): Promise<Snapshot> {
 async function handleCommand(cmd: string, opts: SendOptions): Promise<void> {
   if (cmd === "/start" || cmd === "/help") {
     await sendMessage(HELP, opts);
+    return;
+  }
+  if (cmd === "/id") {
+    // Утилита: узнать id темы форума (выполнить в нужной теме, напр. «Аналитика»).
+    const thread = "thread" in opts ? opts.thread : null;
+    await sendMessage(
+      thread
+        ? `🧵 message_thread_id этой темы: <code>${thread}</code>\nchat_id: <code>${escapeHtml(process.env.TELEGRAM_CHAT_ID ?? "")}</code>`
+        : `Это General (без темы форума).\nchat_id: <code>${escapeHtml(process.env.TELEGRAM_CHAT_ID ?? "")}</code>`,
+      opts
+    );
+    return;
+  }
+  if (cmd === "/kliki") {
+    const since = Math.floor(lastSprintStart().getTime() / 1000);
+    await sendMessage(formatClicksMessage(await getClicksStats(since), "Заходы по ссылкам · спринт"), opts);
+    return;
+  }
+  if (cmd === "/klikitotal") {
+    await sendMessage(formatClicksMessage(await getClicksStats(0), "Заходы по ссылкам · за всё время"), opts);
     return;
   }
   if (cmd === "/info") {
@@ -104,6 +127,8 @@ export async function GET(req: NextRequest) {
         { command: "now", description: "Отчёт с 12:30 вчера по сейчас" },
         { command: "otchet", description: "Таблица (CSV) по всем рилсам" },
         { command: "info", description: "Общая статистика по всем рилсам" },
+        { command: "kliki", description: "Заходы по ссылкам за спринт (с 12:30)" },
+        { command: "klikitotal", description: "Заходы по ссылкам за всё время" },
       ],
     }),
   });

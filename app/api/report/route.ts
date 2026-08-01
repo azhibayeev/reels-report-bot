@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { computeReport } from "../../../lib/diff";
-import { escapeHtml, formatMessage } from "../../../lib/format";
+import { escapeHtml, formatClicksMessage, formatMessage } from "../../../lib/format";
+import { getClicksStats, lastSprintStart } from "../../../lib/posthog";
 import {
   fetchAllReels,
   fetchFollowersCount,
@@ -76,6 +77,19 @@ export async function GET(req: NextRequest) {
     const report = computeReport(current, prev);
     await sendMessage(formatMessage(report, followerChanges));
     await saveLastReportKey(todayKey);
+
+    // Сводка кликов по ссылке в шапке → в ту же тему, что и рилс-отчёт («Daily»,
+    // env TELEGRAM_THREAD_ID). Ошибка тут не должна ронять уже отправленный
+    // рилс-отчёт, поэтому изолируем в свой try.
+    try {
+      // Окно = завершившийся суточный спринт (пред. 12:30 → сейчас). Берём границу от
+      // now−1ч, чтобы крон в 12:30 брал ВЧЕРАШНЮЮ границу, а не сегодняшнюю (иначе окно ~0).
+      const since = Math.floor(lastSprintStart(new Date(now.getTime() - 3600_000)).getTime() / 1000);
+      const clicks = await getClicksStats(since);
+      await sendMessage(formatClicksMessage(clicks, "Заходы по ссылкам · за сутки"));
+    } catch (e) {
+      console.error("clicks report failed:", e);
+    }
 
     return NextResponse.json({
       ok: true,
