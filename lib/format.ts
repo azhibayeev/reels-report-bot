@@ -1,7 +1,16 @@
+import type { AdInsights } from "./meta";
+import type { LeadLevels } from "./leads";
 import type { ClicksStats } from "./posthog";
 import { FollowerChanges, FollowerStats, Report, Snapshot } from "./types";
 
 const nf = new Intl.NumberFormat("ru-RU");
+
+// Деньги: сумма + валюта аккаунта. USD → «$1 234.56», иначе «1 234.56 EUR».
+const money = new Intl.NumberFormat("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function fmtMoney(amount: number, currency: string): string {
+  const n = money.format(amount);
+  return currency === "USD" ? `$${n}` : `${n} ${escapeHtml(currency)}`;
+}
 
 const dtf = new Intl.DateTimeFormat("ru-RU", {
   timeZone: "Asia/Jakarta",
@@ -142,6 +151,36 @@ export function formatClicksMessage(s: ClicksStats, title: string): string {
   if (direct) lines.push(`<b>Прямые:</b> <b>${nf.format(direct)}</b>`);
   if (other) lines.push(`<b>Другое:</b> ${other}`);
   if (!bio && !inf && !direct && !other) lines.push("Пока нет заходов за период.");
+
+  return lines.join("\n");
+}
+
+// Сводка по таргету: рекламные метрики + разбивка лидов по уровню инвестора.
+// periodLabel задаёт вызывающий (напр. «за вчерашние сутки» / «за всё время»).
+export function formatTargetMessage(
+  ads: AdInsights,
+  levels: LeadLevels,
+  title: string,
+  periodLabel: string
+): string {
+  const lines: string[] = [`🎯 <b>Таргет · ${escapeHtml(title)}</b>`, periodLabel, ""];
+
+  lines.push(`💵 Потрачено: <b>${fmtMoney(ads.spend, ads.currency)}</b>`);
+  lines.push(`🧲 Лидов (результатов): <b>${nf.format(ads.leads)}</b>`);
+  lines.push(
+    `💲 Цена за результат: <b>${ads.costPerResult == null ? "—" : fmtMoney(ads.costPerResult, ads.currency)}</b>`
+  );
+  lines.push(`👁 Показы: <b>${nf.format(ads.impressions)}</b>`);
+  lines.push(`🖱 Клики: <b>${nf.format(ads.clicks)}</b>`);
+  lines.push(`📣 Охват: <b>${nf.format(ads.reach)}</b>`);
+  if (!ads.hasData) lines.push("<i>За период не было открутки — цифры нулевые.</i>");
+
+  lines.push("");
+  lines.push("<b>Потенциал инвестора</b> (дошли до конца квиза):");
+  lines.push(`🔥 Высокий: <b>${nf.format(levels.high)}</b>`);
+  lines.push(`🟡 Средний: <b>${nf.format(levels.medium)}</b>`);
+  lines.push(`⚪ Низкий: <b>${nf.format(levels.low)}</b>`);
+  lines.push(`Σ Всего лидов: <b>${nf.format(levels.total)}</b>`);
 
   return lines.join("\n");
 }

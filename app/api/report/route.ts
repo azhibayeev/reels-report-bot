@@ -1,8 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildTrendChart, computeDailyViewGains, renderChartPng } from "../../../lib/chart";
 import { computeReport } from "../../../lib/diff";
-import { escapeHtml, formatClicksMessage, formatMessage } from "../../../lib/format";
+import { escapeHtml, formatClicksMessage, formatMessage, formatTargetMessage } from "../../../lib/format";
+import { getLeadLevels } from "../../../lib/leads";
+import { getAdInsights } from "../../../lib/meta";
 import { getClicksStats, getDailyClicks, lastSprintStart } from "../../../lib/posthog";
+import {
+  buildRows,
+  fetchAllReelsDetailed,
+  fetchReelInsights,
+  toSheetValues,
+} from "../../../lib/reels-table";
+import { sheetsConfigured, syncSheet } from "../../../lib/sheets";
 import {
   fetchAllReels,
   fetchFollowersCount,
@@ -93,6 +102,20 @@ export async function GET(req: NextRequest) {
       console.error("clicks report failed:", e);
     }
 
+    // Сводка по таргету (реклама Meta + разбивка лидов по уровню инвестора) → тема Daily.
+    // Рекламные цифры — за вчерашний рекламный день (Insights не умеет скользящее 24ч);
+    // разбивка лидов — за суточный спринт (с 12:30). Изолировано: ошибка не роняет отчёт.
+    try {
+      const ads = await getAdInsights("yesterday");
+      const sprintStart = lastSprintStart(new Date(now.getTime() - 3600_000));
+      const levels = await getLeadLevels(sprintStart.toISOString());
+      await sendMessage(
+        formatTargetMessage(ads, levels, "за сутки", "🗓 Реклама — вчерашние сутки · лиды — с 12:30 вчера")
+      );
+    } catch (e) {
+      console.error("target report failed:", e);
+    }
+
     // График динамики (просмотры/день + заходы/день) за 14 дней → тема Daily.
     // Изолирован: любая ошибка (QuickChart/PostHog/мало данных) не роняет отчёт.
     try {
@@ -106,6 +129,20 @@ export async function GET(req: NextRequest) {
       }
     } catch (e) {
       console.error("trend chart failed:", e);
+    }
+
+    // Google-таблица со статистикой по всем рилсам. Отдельного планировщика не заводим —
+    // обновляемся вместе с ежедневным отчётом. Данные берём своим запросом: здесь нужны
+    // лайки/комменты/репосты/охват, которых нет в снапшоте отчёта. Изолировано: ошибка
+    // Sheets не должна ронять уже отправленный отчёт.
+    try {
+      if (sheetsConfigured()) {
+        const detailed = await fetchAllReelsDetailed(process.env.IG_USER_ID, token);
+        const insights = await fetchReelInsights(token, detailed.map((m) => m.id));
+        await syncSheet(toSheetValues(buildRows(detailed, insights), new Date()));
+      }
+    } catch (e) {
+      console.error("sheet sync failed:", e);
     }
 
     return NextResponse.json({
