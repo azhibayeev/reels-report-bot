@@ -8,6 +8,9 @@ import { getClicksStats, getDailyClicks, lastSprintStart } from "../../../lib/po
 import {
   buildRows,
   fetchAllReelsDetailed,
+  HEADERS,
+  HEATMAP_FIRST_COL,
+  HEATMAP_LAST_COL,
   fetchReelInsights,
   resolveDurations,
   toSheetValues,
@@ -151,13 +154,27 @@ export async function GET(req: NextRequest) {
         const at = new Date();
         // Свежий снапшот уже сохранён выше, так что история включает сегодняшний день.
         const history = buildHistory(await loadRecentSnapshots(MAX_DAYS + 1));
-        await syncSheet(toSheetValues(buildRows(detailed, insights, durations), at), reelsTab());
-        await syncSheet(toHistoryValues(history, at, durations), historyTab(), 5, {
-          startRowIndex: 1,
-          rowCount: history.rows.length,
-          startColumnIndex: HISTORY_HEADERS.length,
-          endColumnIndex: HISTORY_HEADERS.length + history.dates.length,
-        });
+        const reelRows = buildRows(detailed, insights, durations);
+        await syncSheet(toSheetValues(reelRows, at), reelsTab(), 0, [
+          {
+            kind: "column",
+            startRowIndex: 1,
+            rowCount: reelRows.length,
+            startColumnIndex: HEADERS.indexOf(HEATMAP_FIRST_COL),
+            endColumnIndex: HEADERS.indexOf(HEATMAP_LAST_COL) + 1,
+            scale: "redYellowGreen",
+          },
+        ]);
+        await syncSheet(toHistoryValues(history, at, durations), historyTab(), 5, [
+          {
+            kind: "row",
+            startRowIndex: 1,
+            rowCount: history.rows.length,
+            startColumnIndex: HISTORY_HEADERS.length,
+            endColumnIndex: HISTORY_HEADERS.length + history.dates.length,
+            scale: "green",
+          },
+        ]);
       }
     } catch (e) {
       console.error("sheet sync failed:", e);

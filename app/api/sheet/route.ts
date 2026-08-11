@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   buildRows,
   fetchAllReelsDetailed,
+  HEADERS,
+  HEATMAP_FIRST_COL,
+  HEATMAP_LAST_COL,
   fetchReelInsights,
   resolveDurations,
   toSheetValues,
@@ -56,13 +59,26 @@ export async function GET(req: NextRequest) {
     }
 
     const updatedAt = new Date();
-    await syncSheet(toSheetValues(rows, updatedAt), reelsTab());
-    await syncSheet(toHistoryValues(history, updatedAt, durations), historyTab(), 5, {
-      startRowIndex: 1,
-      rowCount: history.rows.length,
-      startColumnIndex: HISTORY_HEADERS.length,
-      endColumnIndex: HISTORY_HEADERS.length + history.dates.length,
-    });
+    await syncSheet(toSheetValues(rows, updatedAt), reelsTab(), 0, [
+      {
+        kind: "column",
+        startRowIndex: 1,
+        rowCount: rows.length,
+        startColumnIndex: HEADERS.indexOf(HEATMAP_FIRST_COL),
+        endColumnIndex: HEADERS.indexOf(HEATMAP_LAST_COL) + 1,
+        scale: "redYellowGreen",
+      },
+    ]);
+    await syncSheet(toHistoryValues(history, updatedAt, durations), historyTab(), 5, [
+      {
+        kind: "row",
+        startRowIndex: 1,
+        rowCount: history.rows.length,
+        startColumnIndex: HISTORY_HEADERS.length,
+        endColumnIndex: HISTORY_HEADERS.length + history.dates.length,
+        scale: "green",
+      },
+    ]);
 
     return NextResponse.json({
       ok: true,

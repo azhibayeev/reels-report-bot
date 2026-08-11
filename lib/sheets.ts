@@ -153,12 +153,20 @@ async function ensureTab(
   return found.sheetId;
 }
 
-export interface RowHeatmap {
+/**
+ * `row` — своя шкала у каждой строки (матрица истории: сравниваем дни одного ролика).
+ * `column` — своя шкала у каждой колонки (лист Reels: сравниваем ролики между собой).
+ * Одним правилом ни то, ни другое не делается: градиент Sheets считается по всему
+ * диапазону правила, поэтому кладём по правилу на строку либо на колонку.
+ */
+export interface Heatmap {
+  kind: "row" | "column";
   /** 0-based индекс первой строки с данными (шапка не входит). */
   startRowIndex: number;
   rowCount: number;
   startColumnIndex: number;
   endColumnIndex: number;
+  scale: "green" | "redYellowGreen";
 }
 
 const rgb = (hex: string) => ({
@@ -169,9 +177,12 @@ const rgb = (hex: string) => ({
 
 // Последовательная шкала: один тон, светлое → насыщенное. Чёрный текст читается
 // на всех ступенях (контраст ≥ 7:1), поэтому цвет шрифта менять не нужно.
-const HEAT_MIN = rgb("#ffffff");
-const HEAT_MID = rgb("#98dbc3");
-const HEAT_MAX = rgb("#1baf7a");
+const SCALES = {
+  green: { min: rgb("#ffffff"), mid: rgb("#98dbc3"), max: rgb("#1baf7a") },
+  // Красный→жёлтый→зелёный: выбор пользователя, повторяем его ручную разметку
+  // один в один. Оговорка: при красно-зелёной слепоте концы шкалы неразличимы.
+  redYellowGreen: { min: rgb("#e67c73"), mid: rgb("#ffd666"), max: rgb("#57bb8a") },
+} as const;
 
 const RULES_PER_BATCH = 100;
 
@@ -180,13 +191,52 @@ const RULES_PER_BATCH = 100;
 // свежие ролики (они сверху), остальные остаются без заливки — о чём пишем в лог.
 const MAX_HEATMAP_ROWS = 400;
 
-/**
- * Тепловая карта ПО КАЖДОЙ СТРОКЕ отдельно: у каждого ролика своя шкала, поэтому
- * видно его собственные пиковые дни, а не то, что он мельче виральных соседей.
- * Одним правилом это не делается — градиент Sheets считается по всему диапазону,
- * поэтому кладём по правилу на строку.
- */
-async function applyRowHeatmap(spreadsheetId: string, sheetId: number, h: RowHeatmap): Promise<void> {
+/** Чистая сборка запросов условного форматирования — тестируется без сети. */
+export function buildHeatmapRequests(sheetId: number, h: Heatmap): unknown[] {
+  const scale = SCALES[h.scale];
+  const gradientRule = {
+    minpoint: { color: scale.min, type: "MIN" },
+    midpoint: { color: scale.mid, type: "PERCENTILE", value: "50" },
+    maxpoint: { color: scale.max, type: "MAX" },
+  };
+  const rule = (range: Record<string, number>) => ({
+    addConditionalFormatRule: { index: 0, rule: { ranges: [{ sheetId, ...range }], gradientRule } },
+  });
+
+  if (h.kind === "column") {
+    const out: unknown[] = [];
+    for (let c = h.startColumnIndex; c < h.endColumnIndex; c++) {
+      out.push(
+        rule({
+          startRowIndex: h.startRowIndex,
+          endRowIndex: h.startRowIndex + h.rowCount,
+          startColumnIndex: c,
+          endColumnIndex: c + 1,
+        })
+      );
+    }
+    return out;
+  }
+
+  const painted = Math.min(h.rowCount, MAX_HEATMAP_ROWS);
+  if (painted < h.rowCount) {
+    console.log(`heatmap: покрашено ${painted} строк из ${h.rowCount}, остальные без заливки`);
+  }
+  const out: unknown[] = [];
+  for (let r = 0; r < painted; r++) {
+    out.push(
+      rule({
+        startRowIndex: h.startRowIndex + r,
+        endRowIndex: h.startRowIndex + r + 1,
+        startColumnIndex: h.startColumnIndex,
+        endColumnIndex: h.endColumnIndex,
+      })
+    );
+  }
+  return out;
+}
+
+async function applyHeatmaps(spreadsheetId: string, sheetId: number, maps: Heatmap[]): Promise<void> {
   // Значения мы перезаписываем, но правила остаются жить на листе — без чистки
   // они копились бы с каждым прогоном.
   const meta = (await api(
@@ -197,34 +247,7 @@ async function applyRowHeatmap(spreadsheetId: string, sheetId: number, h: RowHea
 
   const requests: unknown[] = [];
   for (let i = existing - 1; i >= 0; i--) requests.push({ deleteConditionalFormatRule: { sheetId, index: i } });
-
-  const painted = Math.min(h.rowCount, MAX_HEATMAP_ROWS);
-  if (painted < h.rowCount) {
-    console.log(`heatmap: покрашено ${painted} строк из ${h.rowCount}, остальные без заливки`);
-  }
-  for (let r = 0; r < painted; r++) {
-    requests.push({
-      addConditionalFormatRule: {
-        index: 0,
-        rule: {
-          ranges: [
-            {
-              sheetId,
-              startRowIndex: h.startRowIndex + r,
-              endRowIndex: h.startRowIndex + r + 1,
-              startColumnIndex: h.startColumnIndex,
-              endColumnIndex: h.endColumnIndex,
-            },
-          ],
-          gradientRule: {
-            minpoint: { color: HEAT_MIN, type: "MIN" },
-            midpoint: { color: HEAT_MID, type: "PERCENTILE", value: "50" },
-            maxpoint: { color: HEAT_MAX, type: "MAX" },
-          },
-        },
-      },
-    });
-  }
+  for (const h of maps) requests.push(...buildHeatmapRequests(sheetId, h));
 
   for (let i = 0; i < requests.length; i += RULES_PER_BATCH) {
     await api(`${spreadsheetId}:batchUpdate`, {
@@ -241,7 +264,7 @@ export async function syncSheet(
   values: Array<Array<string | number>>,
   tab: string,
   freezeCols = 0,
-  heatmap?: RowHeatmap
+  heatmaps: Heatmap[] = []
 ): Promise<void> {
   const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID;
   if (!spreadsheetId) throw new Error("SHEETS_SPREADSHEET_ID не задан");
@@ -284,10 +307,11 @@ export async function syncSheet(
     console.error("sheet formatting failed:", e);
   }
 
-  // Тепловая карта — тоже косметика: её отказ не должен ронять запись данных.
-  if (heatmap && heatmap.rowCount > 0 && heatmap.endColumnIndex > heatmap.startColumnIndex) {
+  // Тепловые карты — тоже косметика: их отказ не должен ронять запись данных.
+  const usable = heatmaps.filter((h) => h.rowCount > 0 && h.endColumnIndex > h.startColumnIndex);
+  if (usable.length > 0) {
     try {
-      await applyRowHeatmap(spreadsheetId, sheetId, heatmap);
+      await applyHeatmaps(spreadsheetId, sheetId, usable);
     } catch (e) {
       console.error("sheet heatmap failed:", e);
     }
