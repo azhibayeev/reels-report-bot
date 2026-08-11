@@ -37,6 +37,9 @@ export function sheetsConfigured(): boolean {
   );
 }
 
+export const reelsTab = (): string => process.env.SHEETS_TAB || "Reels";
+export const historyTab = (): string => process.env.SHEETS_HISTORY_TAB || "История";
+
 export function buildJwtClaim(email: string, nowSec: number): JwtClaim {
   return { iss: email, scope: SCOPE, aud: TOKEN_URL, exp: nowSec + 3600, iat: nowSec };
 }
@@ -87,36 +90,86 @@ async function api(path: string, init?: RequestInit): Promise<unknown> {
   return res.json();
 }
 
-interface SheetProps {
-  sheets?: Array<{ properties?: { sheetId?: number; title?: string } }>;
+interface GridProps {
+  sheetId?: number;
+  title?: string;
+  gridProperties?: { rowCount?: number; columnCount?: number };
 }
 
-// Возвращает числовой id листа с таким названием; создаёт лист, если его ещё нет.
-// Так пользователю достаточно создать пустую таблицу — имя вкладки не важно.
-async function ensureTab(spreadsheetId: string, tab: string): Promise<number> {
-  const meta = (await api(`${spreadsheetId}?fields=sheets.properties`)) as SheetProps;
-  const found = meta.sheets?.find((s) => s.properties?.title === tab)?.properties?.sheetId;
-  if (typeof found === "number") return found;
+interface SheetProps {
+  sheets?: Array<{ properties?: GridProps }>;
+}
 
-  const created = (await api(`${spreadsheetId}:batchUpdate`, {
-    method: "POST",
-    body: JSON.stringify({ requests: [{ addSheet: { properties: { title: tab } } }] }),
-  })) as { replies?: Array<{ addSheet?: { properties?: { sheetId?: number } } }> };
-  const id = created.replies?.[0]?.addSheet?.properties?.sheetId;
-  if (typeof id !== "number") throw new Error(`Sheets: не удалось создать лист «${tab}»`);
-  return id;
+// Возвращает лист с таким названием; создаёт, если его ещё нет — пользователю
+// достаточно создать пустую таблицу, имя вкладки по умолчанию не важно.
+// Сразу же расширяет сетку под нужный размер: values.update не растит лист сам и
+// падает с "exceeds grid limits", если данных больше, чем строк/колонок в листе.
+async function ensureTab(
+  spreadsheetId: string,
+  tab: string,
+  rows: number,
+  cols: number
+): Promise<number> {
+  const meta = (await api(`${spreadsheetId}?fields=sheets.properties`)) as SheetProps;
+  const found = meta.sheets?.find((s) => s.properties?.title === tab)?.properties;
+
+  if (!found || typeof found.sheetId !== "number") {
+    const created = (await api(`${spreadsheetId}:batchUpdate`, {
+      method: "POST",
+      body: JSON.stringify({
+        requests: [
+          { addSheet: { properties: { title: tab, gridProperties: { rowCount: rows, columnCount: cols } } } },
+        ],
+      }),
+    })) as { replies?: Array<{ addSheet?: { properties?: { sheetId?: number } } }> };
+    const id = created.replies?.[0]?.addSheet?.properties?.sheetId;
+    if (typeof id !== "number") throw new Error(`Sheets: не удалось создать лист «${tab}»`);
+    return id;
+  }
+
+  const haveRows = found.gridProperties?.rowCount ?? 0;
+  const haveCols = found.gridProperties?.columnCount ?? 0;
+  if (haveRows < rows || haveCols < cols) {
+    await api(`${spreadsheetId}:batchUpdate`, {
+      method: "POST",
+      body: JSON.stringify({
+        requests: [
+          {
+            updateSheetProperties: {
+              properties: {
+                sheetId: found.sheetId,
+                gridProperties: {
+                  rowCount: Math.max(haveRows, rows),
+                  columnCount: Math.max(haveCols, cols),
+                },
+              },
+              fields: "gridProperties.rowCount,gridProperties.columnCount",
+            },
+          },
+        ],
+      }),
+    });
+  }
+  return found.sheetId;
 }
 
 // Полная перезапись листа: сначала чистим всё, потом кладём новые значения.
 // Так прогон идемпотентен и хвост от прошлого (более длинного) прогона не остаётся.
-export async function syncSheet(values: Array<Array<string | number>>): Promise<void> {
+// freezeCols — сколько левых колонок закрепить (для широкой матрицы истории).
+export async function syncSheet(
+  values: Array<Array<string | number>>,
+  tab: string,
+  freezeCols = 0
+): Promise<void> {
   const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID;
   if (!spreadsheetId) throw new Error("SHEETS_SPREADSHEET_ID не задан");
-  const tab = process.env.SHEETS_TAB || "Reels";
 
-  const sheetId = await ensureTab(spreadsheetId, tab);
-  const range = encodeURIComponent(`'${tab}'!A:Z`);
+  const needRows = Math.max(values.length + 10, 100);
+  const needCols = Math.max(...values.map((r) => r.length), 26);
+  const sheetId = await ensureTab(spreadsheetId, tab, needRows, needCols);
 
+  // Диапазон = имя листа целиком: чистим и старые колонки тоже, а не только A:Z.
+  const range = encodeURIComponent(`'${tab}'`);
   await api(`${spreadsheetId}/values/${range}:clear`, { method: "POST", body: "{}" });
   await api(
     `${spreadsheetId}/values/${encodeURIComponent(`'${tab}'!A1`)}?valueInputOption=USER_ENTERED`,
@@ -131,8 +184,8 @@ export async function syncSheet(values: Array<Array<string | number>>): Promise<
         requests: [
           {
             updateSheetProperties: {
-              properties: { sheetId, gridProperties: { frozenRowCount: 1 } },
-              fields: "gridProperties.frozenRowCount",
+              properties: { sheetId, gridProperties: { frozenRowCount: 1, frozenColumnCount: freezeCols } },
+              fields: "gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
             },
           },
           {

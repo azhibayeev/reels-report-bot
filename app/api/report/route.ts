@@ -11,7 +11,8 @@ import {
   fetchReelInsights,
   toSheetValues,
 } from "../../../lib/reels-table";
-import { sheetsConfigured, syncSheet } from "../../../lib/sheets";
+import { buildHistory, MAX_DAYS, toHistoryValues } from "../../../lib/reels-history";
+import { historyTab, reelsTab, sheetsConfigured, syncSheet } from "../../../lib/sheets";
 import {
   fetchAllReels,
   fetchFollowersCount,
@@ -139,7 +140,11 @@ export async function GET(req: NextRequest) {
       if (sheetsConfigured()) {
         const detailed = await fetchAllReelsDetailed(process.env.IG_USER_ID, token);
         const insights = await fetchReelInsights(token, detailed.map((m) => m.id));
-        await syncSheet(toSheetValues(buildRows(detailed, insights), new Date()));
+        const at = new Date();
+        await syncSheet(toSheetValues(buildRows(detailed, insights), at), reelsTab());
+        // Свежий снапшот уже сохранён выше, так что история включает сегодняшний день.
+        const history = buildHistory(await loadRecentSnapshots(MAX_DAYS + 1));
+        await syncSheet(toHistoryValues(history, at), historyTab(), 4);
       }
     } catch (e) {
       console.error("sheet sync failed:", e);
