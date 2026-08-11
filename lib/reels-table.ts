@@ -30,6 +30,8 @@ export interface ReelRow extends ReelMedia, ReelInsight {
   engagementRate: number | null;
   /** Длительность ролика в секундах; null — определить не удалось. */
   durationSec: number | null;
+  /** Средний досмотр в % от длины ролика; null, если нет длительности или досмотра. */
+  watchThroughPct: number | null;
 }
 
 const EMPTY_INSIGHT: ReelInsight = {
@@ -56,6 +58,7 @@ export const HEADERS = [
   "Всего реакций",
   "ER %",
   "Ср. досмотр, с",
+  "Досмотр, %",
   "ID",
 ] as const;
 
@@ -99,7 +102,19 @@ export function buildRows(
           ? Math.round((ins.totalInteractions / ins.reach) * 10_000) / 100
           : null;
       const d = durations[m.id];
-      return { ...m, ...ins, engagementRate: er, durationSec: d == null ? null : roundTenth(d) };
+      // Может быть больше 100%: Reels зациклены, и повторные просмотры одного
+      // человека складываются в среднее время просмотра.
+      const watch =
+        d != null && d > 0 && ins.avgWatchTimeMs != null
+          ? roundTenth((ins.avgWatchTimeMs / 1000 / d) * 100)
+          : null;
+      return {
+        ...m,
+        ...ins,
+        engagementRate: er,
+        durationSec: d == null ? null : roundTenth(d),
+        watchThroughPct: watch,
+      };
     })
     .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp));
 }
@@ -126,7 +141,8 @@ export function toSheetValues(rows: ReelRow[], updatedAt: Date): Array<Array<str
       cell(r.saved),
       cell(r.totalInteractions),
       cell(r.engagementRate),
-      r.avgWatchTimeMs == null ? "" : Math.round(r.avgWatchTimeMs / 100) / 10,
+      r.avgWatchTimeMs == null ? "" : roundTenth(r.avgWatchTimeMs / 1000),
+      cell(r.watchThroughPct),
       r.id,
     ]),
   ];

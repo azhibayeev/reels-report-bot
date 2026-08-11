@@ -132,7 +132,7 @@ describe("toSheetValues", () => {
     expect(row[0]).toBe(1);
     expect(row[5]).toBe(1000); // просмотры
     expect(row[9]).toBe(""); // репосты недоступны
-    expect(row[14]).toBe("a");
+    expect(row[15]).toBe("a");
   });
 
   it("converts average watch time from milliseconds to seconds", () => {
@@ -155,6 +155,42 @@ describe("durations", () => {
     const rows = buildRows([media("a", "2026-07-01T00:00:00+0000")], new Map());
     expect(rows[0].durationSec).toBeNull();
     expect(toSheetValues(rows, new Date())[1][4]).toBe("");
+  });
+});
+
+describe("watch-through rate", () => {
+  it("is average watch time as a share of the reel's length", () => {
+    const rows = buildRows(
+      [media("a", "2026-07-01T00:00:00+0000")],
+      new Map([["a", insight({ avgWatchTimeMs: 6000 })]]),
+      { a: 10 }
+    );
+    expect(rows[0].watchThroughPct).toBe(60);
+    expect(toSheetValues(rows, new Date())[1][14]).toBe(60);
+  });
+
+  it("may exceed 100% because reels loop", () => {
+    const rows = buildRows(
+      [media("a", "2026-07-01T00:00:00+0000")],
+      new Map([["a", insight({ avgWatchTimeMs: 13_000 })]]),
+      { a: 10 }
+    );
+    expect(rows[0].watchThroughPct).toBe(130);
+  });
+
+  it("is empty without a duration or without a watch time", () => {
+    const noDuration = buildRows(
+      [media("a", "2026-07-01T00:00:00+0000")],
+      new Map([["a", insight({ avgWatchTimeMs: 6000 })]])
+    );
+    const noWatch = buildRows(
+      [media("a", "2026-07-01T00:00:00+0000")],
+      new Map([["a", insight({ avgWatchTimeMs: null })]]),
+      { a: 10 }
+    );
+    expect(noDuration[0].watchThroughPct).toBeNull();
+    expect(noWatch[0].watchThroughPct).toBeNull();
+    expect(toSheetValues(noWatch, new Date())[1][14]).toBe("");
   });
 });
 
