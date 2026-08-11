@@ -77,10 +77,12 @@ export function buildHistory(snaps: Snapshot[], maxDays: number = MAX_DAYS): His
   return { dates: shown, rows };
 }
 
-/** Ключ дня YYYY-MM-DD → заголовок колонки дд.мм */
+// Ключ дня YYYY-MM-DD → заголовок колонки дд.мм. Ведущий апостроф заставляет Sheets
+// хранить это как текст: без него «11.08» распознаётся датой и отображение зависит
+// от локали таблицы.
 export function dayHeader(dateKey: string): string {
   const [, m, d] = dateKey.split("-");
-  return `${d}.${m}`;
+  return `'${d}.${m}`;
 }
 
 export const HISTORY_HEADERS = [
