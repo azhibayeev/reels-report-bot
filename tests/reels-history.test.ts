@@ -91,6 +91,13 @@ describe("buildHistory", () => {
   });
 });
 
+describe("toHistoryValues durations", () => {
+  it("fills the duration column from the cache", () => {
+    const m = buildHistory([snap("2026-08-01", [["a", 10]]), snap("2026-08-02", [["a", 25]])]);
+    expect(toHistoryValues(m, new Date(), { a: 44.44 })[1][4]).toBe(44.4);
+  });
+});
+
 describe("dayHeader", () => {
   it("renders a day key as dd.mm", () => {
     expect(dayHeader("2026-08-03")).toBe("03.08");
@@ -103,8 +110,8 @@ describe("toHistoryValues", () => {
     const values = toHistoryValues(m, new Date("2026-08-02T05:30:00Z"));
     expect(values[0]).toEqual([...HISTORY_HEADERS, "02.08"]);
     expect(values[1][0]).toBe(1);
-    expect(values[1][4]).toBe(25); // всего просмотров
-    expect(values[1][5]).toBe(15); // прирост за 02.08
+    expect(values[1][5]).toBe(25); // всего просмотров
+    expect(values[1][6]).toBe(15); // прирост за 02.08
   });
 
   it("writes gaps as empty cells, not zeros", () => {
@@ -113,7 +120,7 @@ describe("toHistoryValues", () => {
       snap("2026-08-02", [["a", 20]]),
       snap("2026-08-03", []),
     ]);
-    expect(toHistoryValues(m, new Date())[1][5]).toBe("");
+    expect(toHistoryValues(m, new Date())[1][6]).toBe("");
   });
 
   it("ends with a legend row explaining the numbers", () => {

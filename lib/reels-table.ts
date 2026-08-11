@@ -1,6 +1,8 @@
 // ── Сбор полной таблицы по Reels: медиа + инсайты → строки для Google Sheets.
 // Сеть отделена от чистой логики: buildRows/toSheetValues тестируются без фетчей.
 
+import { fetchMp4Duration } from "./mp4";
+
 const G = "https://graph.instagram.com";
 
 export interface ReelMedia {
@@ -10,6 +12,8 @@ export interface ReelMedia {
   caption: string;
   likeCount: number | null;
   commentsCount: number | null;
+  /** Ссылка на mp4 в CDN — живёт недолго, используется сразу для замера длительности. */
+  mediaUrl: string;
 }
 
 export interface ReelInsight {
@@ -24,6 +28,8 @@ export interface ReelInsight {
 export interface ReelRow extends ReelMedia, ReelInsight {
   /** Всего реакций ÷ охват × 100. null, если охвата нет или он нулевой. */
   engagementRate: number | null;
+  /** Длительность ролика в секундах; null — определить не удалось. */
+  durationSec: number | null;
 }
 
 const EMPTY_INSIGHT: ReelInsight = {
@@ -40,6 +46,7 @@ export const HEADERS = [
   "Дата",
   "Ссылка",
   "Описание",
+  "Длительность, с",
   "Просмотры",
   "Охват",
   "Лайки",
@@ -79,7 +86,11 @@ export function jakartaStamp(iso: string): string {
   return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}`;
 }
 
-export function buildRows(media: ReelMedia[], insights: Map<string, ReelInsight>): ReelRow[] {
+export function buildRows(
+  media: ReelMedia[],
+  insights: Map<string, ReelInsight>,
+  durations: Record<string, number> = {}
+): ReelRow[] {
   return media
     .map((m) => {
       const ins = insights.get(m.id) ?? EMPTY_INSIGHT;
@@ -87,12 +98,15 @@ export function buildRows(media: ReelMedia[], insights: Map<string, ReelInsight>
         ins.totalInteractions != null && ins.reach != null && ins.reach > 0
           ? Math.round((ins.totalInteractions / ins.reach) * 10_000) / 100
           : null;
-      return { ...m, ...ins, engagementRate: er };
+      const d = durations[m.id];
+      return { ...m, ...ins, engagementRate: er, durationSec: d == null ? null : roundTenth(d) };
     })
     .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp));
 }
 
 const cell = (v: number | null): string | number => (v == null ? "" : v);
+
+export const roundTenth = (v: number): number => Math.round(v * 10) / 10;
 
 export function toSheetValues(rows: ReelRow[], updatedAt: Date): Array<Array<string | number>> {
   const stamp = jakartaStamp(updatedAt.toISOString());
@@ -103,6 +117,7 @@ export function toSheetValues(rows: ReelRow[], updatedAt: Date): Array<Array<str
       jakartaStamp(r.timestamp),
       r.permalink,
       sheetCaption(r.caption),
+      cell(r.durationSec),
       cell(r.views),
       cell(r.reach),
       cell(r.likeCount),
@@ -127,6 +142,7 @@ interface RawMedia {
   caption?: string;
   like_count?: number;
   comments_count?: number;
+  media_url?: string;
 }
 
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
@@ -134,7 +150,7 @@ const num = (v: unknown): number | null => (typeof v === "number" && Number.isFi
 export async function fetchAllReelsDetailed(igUserId: string, token: string): Promise<ReelMedia[]> {
   const out: RawMedia[] = [];
   let url: string | null =
-    `${G}/${igUserId}/media?fields=id,media_product_type,permalink,timestamp,caption,like_count,comments_count` +
+    `${G}/${igUserId}/media?fields=id,media_product_type,permalink,timestamp,caption,like_count,comments_count,media_url` +
     `&limit=100&access_token=${encodeURIComponent(token)}`;
   while (url) {
     const res = await fetch(url);
@@ -154,6 +170,7 @@ export async function fetchAllReelsDetailed(igUserId: string, token: string): Pr
       caption: m.caption ?? "",
       likeCount: num(m.like_count),
       commentsCount: num(m.comments_count),
+      mediaUrl: m.media_url ?? "",
     }));
 }
 
@@ -215,5 +232,31 @@ export async function fetchReelInsights(token: string, ids: string[]): Promise<M
   }
 
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, ids.length) }, worker));
+  return out;
+}
+
+// Длительности: берём из кэша, а Range-запросами щупаем только те ролики, которых там
+// ещё нет. Возвращаем обновлённый кэш — вызывающий код сохраняет его в Blob.
+export async function resolveDurations(
+  media: ReelMedia[],
+  cached: Record<string, number>
+): Promise<Record<string, number>> {
+  const missing = media.filter((m) => cached[m.id] == null && m.mediaUrl);
+  if (missing.length === 0) return cached;
+
+  const out = { ...cached };
+  let i = 0;
+  async function worker(): Promise<void> {
+    while (i < missing.length) {
+      const m = missing[i++];
+      try {
+        const sec = await fetchMp4Duration(m.mediaUrl);
+        if (sec != null) out[m.id] = sec;
+      } catch (e) {
+        console.error(`duration failed for ${m.id}:`, e);
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, missing.length) }, worker));
   return out;
 }

@@ -18,6 +18,7 @@ function media(id: string, timestamp: string, over: Partial<ReelMedia> = {}): Re
     caption: "",
     likeCount: 10,
     commentsCount: 2,
+    mediaUrl: `https://cdn.example/${id}.mp4`,
     ...over,
   };
 }
@@ -129,9 +130,9 @@ describe("toSheetValues", () => {
     const row = toSheetValues(rows, new Date("2026-08-11T05:30:00Z"))[1];
     expect(row).toHaveLength(HEADERS.length);
     expect(row[0]).toBe(1);
-    expect(row[4]).toBe(1000); // просмотры
-    expect(row[8]).toBe(""); // репосты недоступны
-    expect(row[13]).toBe("a");
+    expect(row[5]).toBe(1000); // просмотры
+    expect(row[9]).toBe(""); // репосты недоступны
+    expect(row[14]).toBe("a");
   });
 
   it("converts average watch time from milliseconds to seconds", () => {
@@ -139,7 +140,21 @@ describe("toSheetValues", () => {
       [media("a", "2026-07-01T00:00:00+0000")],
       new Map([["a", insight({ avgWatchTimeMs: 12_340 })]])
     );
-    expect(toSheetValues(rows, new Date())[1][12]).toBe(12.3);
+    expect(toSheetValues(rows, new Date())[1][13]).toBe(12.3);
+  });
+});
+
+describe("durations", () => {
+  it("writes the cached duration, rounded to a tenth of a second", () => {
+    const rows = buildRows([media("a", "2026-07-01T00:00:00+0000")], new Map(), { a: 31.466 });
+    expect(rows[0].durationSec).toBe(31.5);
+    expect(toSheetValues(rows, new Date())[1][4]).toBe(31.5);
+  });
+
+  it("leaves the duration cell empty when it is unknown", () => {
+    const rows = buildRows([media("a", "2026-07-01T00:00:00+0000")], new Map());
+    expect(rows[0].durationSec).toBeNull();
+    expect(toSheetValues(rows, new Date())[1][4]).toBe("");
   });
 });
 

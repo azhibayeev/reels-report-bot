@@ -5,7 +5,7 @@
 
 import { jakartaDateKey } from "./storage";
 import { Snapshot } from "./types";
-import { sheetCaption, jakartaStamp } from "./reels-table";
+import { sheetCaption, jakartaStamp, roundTenth } from "./reels-table";
 
 export interface HistoryRow {
   id: string;
@@ -83,11 +83,19 @@ export function dayHeader(dateKey: string): string {
   return `${d}.${m}`;
 }
 
-export const HISTORY_HEADERS = ["№", "Дата публикации", "Ссылка", "Описание", "Всего просмотров"] as const;
+export const HISTORY_HEADERS = [
+  "№",
+  "Дата публикации",
+  "Ссылка",
+  "Описание",
+  "Длительность, с",
+  "Всего просмотров",
+] as const;
 
 export function toHistoryValues(
   matrix: HistoryMatrix,
-  updatedAt: Date
+  updatedAt: Date,
+  durations: Record<string, number> = {}
 ): Array<Array<string | number>> {
   return [
     [...HISTORY_HEADERS, ...matrix.dates.map(dayHeader)],
@@ -96,6 +104,7 @@ export function toHistoryValues(
       jakartaStamp(r.publishedAt),
       r.permalink,
       sheetCaption(r.caption),
+      durations[r.id] == null ? "" : roundTenth(durations[r.id]),
       r.totalViews,
       ...r.gains.map((g) => (g == null ? "" : g)),
     ]),

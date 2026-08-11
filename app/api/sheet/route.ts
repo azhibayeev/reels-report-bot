@@ -3,11 +3,12 @@ import {
   buildRows,
   fetchAllReelsDetailed,
   fetchReelInsights,
+  resolveDurations,
   toSheetValues,
 } from "../../../lib/reels-table";
 import { buildHistory, MAX_DAYS, toHistoryValues } from "../../../lib/reels-history";
 import { historyTab, reelsTab, syncSheet } from "../../../lib/sheets";
-import { loadRecentSnapshots } from "../../../lib/storage";
+import { loadDurations, loadRecentSnapshots, saveDurations } from "../../../lib/storage";
 import { resolveToken } from "../../../lib/token";
 
 export const dynamic = "force-dynamic";
@@ -26,10 +27,17 @@ export async function GET(req: NextRequest) {
     if (!process.env.IG_USER_ID) throw new Error("IG_USER_ID is not set");
 
     const token = await resolveToken();
+
     const media = await fetchAllReelsDetailed(process.env.IG_USER_ID, token);
     const insights = await fetchReelInsights(token, media.map((m) => m.id));
-    const rows = buildRows(media, insights);
 
+    // Длительности кэшируются в Blob: щупаем mp4 только у роликов, которых там нет.
+    const cachedDurations = await loadDurations();
+    const durations = await resolveDurations(media, cachedDurations);
+    const measured = Object.keys(durations).length - Object.keys(cachedDurations).length;
+    if (measured > 0) await saveDurations(durations);
+
+    const rows = buildRows(media, insights, durations);
     // MAX_DAYS приростов требует MAX_DAYS+1 снапшотов (прирост считается между парами).
     const history = buildHistory(await loadRecentSnapshots(MAX_DAYS + 1));
 
@@ -38,20 +46,24 @@ export async function GET(req: NextRequest) {
         ok: true,
         reels: rows.length,
         withInsights: insights.size,
+        withDuration: rows.filter((r) => r.durationSec != null).length,
+        newlyMeasured: measured,
         historyDays: history.dates.length,
         historyRows: history.rows.length,
-        sample: rows.slice(0, 3),
+        sample: rows.slice(0, 3).map((r) => ({ id: r.id, durationSec: r.durationSec, views: r.views })),
       });
     }
 
     const updatedAt = new Date();
     await syncSheet(toSheetValues(rows, updatedAt), reelsTab());
-    await syncSheet(toHistoryValues(history, updatedAt), historyTab(), 4);
+    await syncSheet(toHistoryValues(history, updatedAt, durations), historyTab(), 5);
 
     return NextResponse.json({
       ok: true,
       reels: rows.length,
       withInsights: insights.size,
+      withDuration: rows.filter((r) => r.durationSec != null).length,
+      newlyMeasured: measured,
       historyDays: history.dates.length,
       historyRows: history.rows.length,
       updatedAt: updatedAt.toISOString(),

@@ -77,6 +77,33 @@ export async function loadLastReportKey(): Promise<string | null> {
   }
 }
 
+const DURATIONS_PATH = "state/durations.json";
+
+// Длительность ролика не меняется, а достаётся дорого (Range-запрос к CDN на каждый
+// рилс). Поэтому держим кэш id → секунды и щупаем только новые ролики.
+export async function loadDurations(): Promise<Record<string, number>> {
+  const { blobs } = await list({ prefix: DURATIONS_PATH });
+  const blob = blobs.find((b) => b.pathname === DURATIONS_PATH);
+  if (!blob) return {};
+  const res = await fetch(`${blob.url}?ts=${Date.now()}`, { cache: "no-store" });
+  if (!res.ok) return {};
+  try {
+    return (await res.json()) as Record<string, number>;
+  } catch {
+    return {};
+  }
+}
+
+export async function saveDurations(map: Record<string, number>): Promise<void> {
+  await put(DURATIONS_PATH, JSON.stringify(map), {
+    access: "public",
+    contentType: "application/json",
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    cacheControlMaxAge: 60,
+  });
+}
+
 export interface TokenState {
   token: string;
   refreshedAt: string;
