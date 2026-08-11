@@ -94,6 +94,9 @@ export const HISTORY_HEADERS = [
   "Всего просмотров",
 ] as const;
 
+/** Колонка «Всего просмотров» — красим тем же градиентом, что и метрики в Reels. */
+export const HISTORY_TOTAL_COL = "Всего просмотров";
+
 export function toHistoryValues(
   matrix: HistoryMatrix,
   updatedAt: Date,

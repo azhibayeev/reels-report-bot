@@ -9,7 +9,13 @@ import {
   resolveDurations,
   toSheetValues,
 } from "../../../lib/reels-table";
-import { buildHistory, HISTORY_HEADERS, MAX_DAYS, toHistoryValues } from "../../../lib/reels-history";
+import {
+  buildHistory,
+  HISTORY_HEADERS,
+  HISTORY_TOTAL_COL,
+  MAX_DAYS,
+  toHistoryValues,
+} from "../../../lib/reels-history";
 import { historyTab, reelsTab, syncSheet } from "../../../lib/sheets";
 import { loadDurations, loadRecentSnapshots, saveDurations } from "../../../lib/storage";
 import { resolveToken } from "../../../lib/token";
@@ -77,6 +83,14 @@ export async function GET(req: NextRequest) {
         startColumnIndex: HISTORY_HEADERS.length,
         endColumnIndex: HISTORY_HEADERS.length + history.dates.length,
         scale: "green",
+      },
+      {
+        kind: "column",
+        startRowIndex: 1,
+        rowCount: history.rows.length,
+        startColumnIndex: HISTORY_HEADERS.indexOf(HISTORY_TOTAL_COL),
+        endColumnIndex: HISTORY_HEADERS.indexOf(HISTORY_TOTAL_COL) + 1,
+        scale: "redYellowGreen",
       },
     ]);
 
