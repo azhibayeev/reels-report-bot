@@ -131,8 +131,8 @@ describe("toSheetValues", () => {
     expect(row).toHaveLength(HEADERS.length);
     expect(row[0]).toBe(1);
     expect(row[5]).toBe(1000); // просмотры
-    expect(row[9]).toBe(""); // репосты недоступны
-    expect(row[15]).toBe("a");
+    expect(row[10]).toBe(""); // репосты недоступны
+    expect(row[16]).toBe("a");
   });
 
   it("converts average watch time from milliseconds to seconds", () => {
@@ -140,7 +140,7 @@ describe("toSheetValues", () => {
       [media("a", "2026-07-01T00:00:00+0000")],
       new Map([["a", insight({ avgWatchTimeMs: 12_340 })]])
     );
-    expect(toSheetValues(rows, new Date())[1][13]).toBe(12.3);
+    expect(toSheetValues(rows, new Date())[1][14]).toBe(12.3);
   });
 });
 
@@ -166,7 +166,7 @@ describe("watch-through rate", () => {
       { a: 10 }
     );
     expect(rows[0].watchThroughPct).toBe(60);
-    expect(toSheetValues(rows, new Date())[1][14]).toBe(60);
+    expect(toSheetValues(rows, new Date())[1][15]).toBe(60);
   });
 
   it("may exceed 100% because reels loop", () => {
@@ -190,7 +190,20 @@ describe("watch-through rate", () => {
     );
     expect(noDuration[0].watchThroughPct).toBeNull();
     expect(noWatch[0].watchThroughPct).toBeNull();
-    expect(toSheetValues(noWatch, new Date())[1][14]).toBe("");
+    expect(toSheetValues(noWatch, new Date())[1][15]).toBe("");
+  });
+});
+
+describe("estimated followers column", () => {
+  it("writes the estimate when it is known", () => {
+    const rows = buildRows([media("a", "2026-07-01T00:00:00+0000")], new Map(), {}, { a: 42 });
+    expect(rows[0].estFollowers).toBe(42);
+    expect(toSheetValues(rows, new Date())[1][7]).toBe(42);
+  });
+
+  it("leaves the cell empty for a reel with no estimate", () => {
+    const rows = buildRows([media("a", "2026-07-01T00:00:00+0000")], new Map());
+    expect(toSheetValues(rows, new Date())[1][7]).toBe("");
   });
 });
 

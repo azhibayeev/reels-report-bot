@@ -149,9 +149,12 @@ export async function GET(req: NextRequest) {
           await saveDurations(durations);
         }
         const at = new Date();
-        await syncSheet(toSheetValues(buildRows(detailed, insights, durations), at), reelsTab());
         // Свежий снапшот уже сохранён выше, так что история включает сегодняшний день.
         const history = buildHistory(await loadRecentSnapshots(MAX_DAYS + 1));
+        await syncSheet(
+          toSheetValues(buildRows(detailed, insights, durations, history.estFollowers), at),
+          reelsTab()
+        );
         await syncSheet(toHistoryValues(history, at, durations), historyTab(), 5);
       }
     } catch (e) {

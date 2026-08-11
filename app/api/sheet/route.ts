@@ -29,6 +29,7 @@ export async function GET(req: NextRequest) {
     const token = await resolveToken();
 
     const media = await fetchAllReelsDetailed(process.env.IG_USER_ID, token);
+
     const insights = await fetchReelInsights(token, media.map((m) => m.id));
 
     // Длительности кэшируются в Blob: щупаем mp4 только у роликов, которых там нет.
@@ -37,9 +38,9 @@ export async function GET(req: NextRequest) {
     const measured = Object.keys(durations).length - Object.keys(cachedDurations).length;
     if (measured > 0) await saveDurations(durations);
 
-    const rows = buildRows(media, insights, durations);
     // MAX_DAYS приростов требует MAX_DAYS+1 снапшотов (прирост считается между парами).
     const history = buildHistory(await loadRecentSnapshots(MAX_DAYS + 1));
+    const rows = buildRows(media, insights, durations, history.estFollowers);
 
     if (req.nextUrl.searchParams.get("dry") === "1") {
       return NextResponse.json({

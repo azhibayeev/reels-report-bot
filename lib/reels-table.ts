@@ -32,6 +32,8 @@ export interface ReelRow extends ReelMedia, ReelInsight {
   durationSec: number | null;
   /** Средний досмотр в % от длины ролика; null, если нет длительности или досмотра. */
   watchThroughPct: number | null;
+  /** ОЦЕНКА приведённых подписчиков (см. HistoryMatrix.estFollowers); null — нет данных. */
+  estFollowers: number | null;
 }
 
 const EMPTY_INSIGHT: ReelInsight = {
@@ -51,6 +53,7 @@ export const HEADERS = [
   "Длительность, с",
   "Просмотры",
   "Охват",
+  "Подписчики (оценка)",
   "Лайки",
   "Комментарии",
   "Репосты",
@@ -92,7 +95,8 @@ export function jakartaStamp(iso: string): string {
 export function buildRows(
   media: ReelMedia[],
   insights: Map<string, ReelInsight>,
-  durations: Record<string, number> = {}
+  durations: Record<string, number> = {},
+  estFollowers: Record<string, number> = {}
 ): ReelRow[] {
   return media
     .map((m) => {
@@ -114,6 +118,7 @@ export function buildRows(
         engagementRate: er,
         durationSec: d == null ? null : roundTenth(d),
         watchThroughPct: watch,
+        estFollowers: estFollowers[m.id] ?? null,
       };
     })
     .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp));
@@ -135,6 +140,7 @@ export function toSheetValues(rows: ReelRow[], updatedAt: Date): Array<Array<str
       cell(r.durationSec),
       cell(r.views),
       cell(r.reach),
+      cell(r.estFollowers),
       cell(r.likeCount),
       cell(r.commentsCount),
       cell(r.shares),
