@@ -6,7 +6,7 @@ import {
   resolveDurations,
   toSheetValues,
 } from "../../../lib/reels-table";
-import { buildHistory, MAX_DAYS, toHistoryValues } from "../../../lib/reels-history";
+import { buildHistory, HISTORY_HEADERS, MAX_DAYS, toHistoryValues } from "../../../lib/reels-history";
 import { historyTab, reelsTab, syncSheet } from "../../../lib/sheets";
 import { loadDurations, loadRecentSnapshots, saveDurations } from "../../../lib/storage";
 import { resolveToken } from "../../../lib/token";
@@ -57,7 +57,12 @@ export async function GET(req: NextRequest) {
 
     const updatedAt = new Date();
     await syncSheet(toSheetValues(rows, updatedAt), reelsTab());
-    await syncSheet(toHistoryValues(history, updatedAt, durations), historyTab(), 5);
+    await syncSheet(toHistoryValues(history, updatedAt, durations), historyTab(), 5, {
+      startRowIndex: 1,
+      rowCount: history.rows.length,
+      startColumnIndex: HISTORY_HEADERS.length,
+      endColumnIndex: HISTORY_HEADERS.length + history.dates.length,
+    });
 
     return NextResponse.json({
       ok: true,

@@ -153,13 +153,86 @@ async function ensureTab(
   return found.sheetId;
 }
 
+export interface RowHeatmap {
+  /** 0-based индекс первой строки с данными (шапка не входит). */
+  startRowIndex: number;
+  rowCount: number;
+  startColumnIndex: number;
+  endColumnIndex: number;
+}
+
+const rgb = (hex: string) => ({
+  red: parseInt(hex.slice(1, 3), 16) / 255,
+  green: parseInt(hex.slice(3, 5), 16) / 255,
+  blue: parseInt(hex.slice(5, 7), 16) / 255,
+});
+
+// Последовательная шкала: один тон, светлое → насыщенное. Чёрный текст читается
+// на всех ступенях (контраст ≥ 7:1), поэтому цвет шрифта менять не нужно.
+const HEAT_MIN = rgb("#ffffff");
+const HEAT_MID = rgb("#98dbc3");
+const HEAT_MAX = rgb("#1baf7a");
+
+const RULES_PER_BATCH = 100;
+
+/**
+ * Тепловая карта ПО КАЖДОЙ СТРОКЕ отдельно: у каждого ролика своя шкала, поэтому
+ * видно его собственные пиковые дни, а не то, что он мельче виральных соседей.
+ * Одним правилом это не делается — градиент Sheets считается по всему диапазону,
+ * поэтому кладём по правилу на строку.
+ */
+async function applyRowHeatmap(spreadsheetId: string, sheetId: number, h: RowHeatmap): Promise<void> {
+  // Значения мы перезаписываем, но правила остаются жить на листе — без чистки
+  // они копились бы с каждым прогоном.
+  const meta = (await api(
+    `${spreadsheetId}?fields=sheets(properties.sheetId,conditionalFormats)`
+  )) as { sheets?: Array<{ properties?: { sheetId?: number }; conditionalFormats?: unknown[] }> };
+  const existing =
+    meta.sheets?.find((s) => s.properties?.sheetId === sheetId)?.conditionalFormats?.length ?? 0;
+
+  const requests: unknown[] = [];
+  for (let i = existing - 1; i >= 0; i--) requests.push({ deleteConditionalFormatRule: { sheetId, index: i } });
+
+  for (let r = 0; r < h.rowCount; r++) {
+    requests.push({
+      addConditionalFormatRule: {
+        index: 0,
+        rule: {
+          ranges: [
+            {
+              sheetId,
+              startRowIndex: h.startRowIndex + r,
+              endRowIndex: h.startRowIndex + r + 1,
+              startColumnIndex: h.startColumnIndex,
+              endColumnIndex: h.endColumnIndex,
+            },
+          ],
+          gradientRule: {
+            minpoint: { color: HEAT_MIN, type: "MIN" },
+            midpoint: { color: HEAT_MID, type: "PERCENTILE", value: "50" },
+            maxpoint: { color: HEAT_MAX, type: "MAX" },
+          },
+        },
+      },
+    });
+  }
+
+  for (let i = 0; i < requests.length; i += RULES_PER_BATCH) {
+    await api(`${spreadsheetId}:batchUpdate`, {
+      method: "POST",
+      body: JSON.stringify({ requests: requests.slice(i, i + RULES_PER_BATCH) }),
+    });
+  }
+}
+
 // Полная перезапись листа: сначала чистим всё, потом кладём новые значения.
 // Так прогон идемпотентен и хвост от прошлого (более длинного) прогона не остаётся.
 // freezeCols — сколько левых колонок закрепить (для широкой матрицы истории).
 export async function syncSheet(
   values: Array<Array<string | number>>,
   tab: string,
-  freezeCols = 0
+  freezeCols = 0,
+  heatmap?: RowHeatmap
 ): Promise<void> {
   const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID;
   if (!spreadsheetId) throw new Error("SHEETS_SPREADSHEET_ID не задан");
@@ -200,5 +273,14 @@ export async function syncSheet(
     });
   } catch (e) {
     console.error("sheet formatting failed:", e);
+  }
+
+  // Тепловая карта — тоже косметика: её отказ не должен ронять запись данных.
+  if (heatmap && heatmap.rowCount > 0 && heatmap.endColumnIndex > heatmap.startColumnIndex) {
+    try {
+      await applyRowHeatmap(spreadsheetId, sheetId, heatmap);
+    } catch (e) {
+      console.error("sheet heatmap failed:", e);
+    }
   }
 }
