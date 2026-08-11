@@ -175,6 +175,11 @@ const HEAT_MAX = rgb("#1baf7a");
 
 const RULES_PER_BATCH = 100;
 
+// Правил становится по одному на ролик, а роликов прибавляется ~10–20 в день.
+// Ограничиваем, иначе через полгода лист станет неповоротливым: красим самые
+// свежие ролики (они сверху), остальные остаются без заливки — о чём пишем в лог.
+const MAX_HEATMAP_ROWS = 400;
+
 /**
  * Тепловая карта ПО КАЖДОЙ СТРОКЕ отдельно: у каждого ролика своя шкала, поэтому
  * видно его собственные пиковые дни, а не то, что он мельче виральных соседей.
@@ -193,7 +198,11 @@ async function applyRowHeatmap(spreadsheetId: string, sheetId: number, h: RowHea
   const requests: unknown[] = [];
   for (let i = existing - 1; i >= 0; i--) requests.push({ deleteConditionalFormatRule: { sheetId, index: i } });
 
-  for (let r = 0; r < h.rowCount; r++) {
+  const painted = Math.min(h.rowCount, MAX_HEATMAP_ROWS);
+  if (painted < h.rowCount) {
+    console.log(`heatmap: покрашено ${painted} строк из ${h.rowCount}, остальные без заливки`);
+  }
+  for (let r = 0; r < painted; r++) {
     requests.push({
       addConditionalFormatRule: {
         index: 0,
