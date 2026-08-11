@@ -4,7 +4,7 @@ import {
   HEADERS,
   jakartaStamp,
   parseInsightPayload,
-  shortCaption,
+  sheetCaption,
   toSheetValues,
   type ReelInsight,
   type ReelMedia,
@@ -83,24 +83,23 @@ describe("buildRows", () => {
   });
 });
 
-describe("shortCaption", () => {
+describe("sheetCaption", () => {
   it("collapses newlines into single spaces", () => {
-    expect(shortCaption("первая\n\nвторая   строка")).toBe("первая вторая строка");
+    expect(sheetCaption("первая\n\nвторая   строка")).toBe("первая вторая строка");
   });
 
-  it("truncates to 120 characters with an ellipsis", () => {
-    const out = shortCaption("x".repeat(200));
-    expect(out).toHaveLength(121);
-    expect(out.endsWith("…")).toBe(true);
+  it("keeps the caption in full, however long it is", () => {
+    const long = "x".repeat(2000);
+    expect(sheetCaption(long)).toBe(long);
   });
 
-  it("does not truncate a caption that fits", () => {
-    expect(shortCaption("коротко")).toBe("коротко");
+  it("leaves a short caption untouched", () => {
+    expect(sheetCaption("коротко")).toBe("коротко");
   });
 
   it("escapes captions that would be read as a formula", () => {
-    expect(shortCaption("=SUM(A1)")).toBe("'=SUM(A1)");
-    expect(shortCaption("-30% скидка")).toBe("'-30% скидка");
+    expect(sheetCaption("=SUM(A1)")).toBe("'=SUM(A1)");
+    expect(sheetCaption("-30% скидка")).toBe("'-30% скидка");
   });
 });
 

@@ -39,7 +39,7 @@ export const HEADERS = [
   "№",
   "Дата",
   "Ссылка",
-  "Начало подписи",
+  "Описание",
   "Просмотры",
   "Охват",
   "Лайки",
@@ -52,14 +52,13 @@ export const HEADERS = [
   "ID",
 ] as const;
 
-const CAPTION_LIMIT = 120;
-
-// Подпись в одну строку и без формул: ячейка, начинающаяся с =/+/-/@, иначе будет
-// интерпретирована Google Sheets как формула (мы пишем в режиме USER_ENTERED).
-export function shortCaption(caption: string): string {
+// Полное описание ролика, но в одну строку: переводы строк схлопываем, иначе Sheets
+// растягивает строки таблицы по высоте и матрицу истории становится не прочитать.
+// Ячейка, начинающаяся с =/+/-/@, была бы прочитана как формула (пишем в режиме
+// USER_ENTERED) — такие экранируем апострофом.
+export function sheetCaption(caption: string): string {
   const flat = caption.replace(/\s+/g, " ").trim();
-  const cut = flat.length > CAPTION_LIMIT ? `${flat.slice(0, CAPTION_LIMIT).trimEnd()}…` : flat;
-  return /^[=+\-@]/.test(cut) ? `'${cut}` : cut;
+  return /^[=+\-@]/.test(flat) ? `'${flat}` : flat;
 }
 
 const jakarta = new Intl.DateTimeFormat("en-CA", {
@@ -103,7 +102,7 @@ export function toSheetValues(rows: ReelRow[], updatedAt: Date): Array<Array<str
       i + 1,
       jakartaStamp(r.timestamp),
       r.permalink,
-      shortCaption(r.caption),
+      sheetCaption(r.caption),
       cell(r.views),
       cell(r.reach),
       cell(r.likeCount),
