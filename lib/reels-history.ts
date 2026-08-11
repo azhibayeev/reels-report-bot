@@ -21,13 +21,6 @@ export interface HistoryMatrix {
   /** Дни (ключи YYYY-MM-DD) от свежего к старому. */
   dates: string[];
   rows: HistoryRow[];
-  /**
-   * ОЦЕНКА подписчиков, приведённых роликом. Instagram не даёт подписки в разрезе
-   * медиа (метрика follows для Reels не поддерживается), поэтому дневной прирост
-   * подписчиков аккаунта раскидывается по роликам пропорционально их просмотрам
-   * за тот же день. Это модель, а не измерение.
-   */
-  estFollowers: Record<string, number>;
 }
 
 /** Сколько дней истории показываем; дальше таблица разрослась бы вправо без пользы. */
@@ -39,11 +32,10 @@ export const MAX_DAYS = 90;
 // пересматривает цифры задним числом, и честнее показать это, чем занулить.
 export function buildHistory(snaps: Snapshot[], maxDays: number = MAX_DAYS): HistoryMatrix {
   const ordered = [...snaps].sort((a, b) => Date.parse(a.takenAt) - Date.parse(b.takenAt));
-  if (ordered.length < 2) return { dates: [], rows: [], estFollowers: {} };
+  if (ordered.length < 2) return { dates: [], rows: [] };
 
   const dates: string[] = [];
   const gainsByReel = new Map<string, Map<string, number>>();
-  const estFollowers: Record<string, number> = {};
 
   for (let i = 1; i < ordered.length; i++) {
     const date = jakartaDateKey(new Date(ordered[i].takenAt));
@@ -51,34 +43,14 @@ export function buildHistory(snaps: Snapshot[], maxDays: number = MAX_DAYS): His
     dates.push(date);
 
     const prev = new Map(ordered[i - 1].reels.map((r) => [r.id, r.views]));
-    let dayTotal = 0;
-    const dayGains: Array<[string, number]> = [];
     for (const r of ordered[i].reels) {
       const before = prev.get(r.id);
       const gain = before == null ? r.views : r.views - before;
       let byDate = gainsByReel.get(r.id);
       if (!byDate) gainsByReel.set(r.id, (byDate = new Map()));
       byDate.set(date, gain);
-      if (gain > 0) {
-        dayGains.push([r.id, gain]);
-        dayTotal += gain;
-      }
-    }
-
-    // Раскидываем прирост подписчиков за день пропорционально просмотрам этого дня.
-    // Дни без followersCount (снапшоты до появления поля) и дни чистого оттока
-    // пропускаем: делить убыль между роликами смысла нет.
-    const before = ordered[i - 1].followersCount;
-    const after = ordered[i].followersCount;
-    if (before != null && after != null && after > before && dayTotal > 0) {
-      const delta = after - before;
-      for (const [id, gain] of dayGains) {
-        estFollowers[id] = (estFollowers[id] ?? 0) + (delta * gain) / dayTotal;
-      }
     }
   }
-
-  for (const id of Object.keys(estFollowers)) estFollowers[id] = Math.round(estFollowers[id]);
 
   // Свежие дни слева: так последняя активность видна без прокрутки вправо.
   const shown = dates.slice(-maxDays).reverse();
@@ -102,7 +74,7 @@ export function buildHistory(snaps: Snapshot[], maxDays: number = MAX_DAYS): His
     }))
     .sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt));
 
-  return { dates: shown, rows, estFollowers };
+  return { dates: shown, rows };
 }
 
 // Ключ дня YYYY-MM-DD → заголовок колонки дд.мм. Ведущий апостроф заставляет Sheets

@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
 
     // MAX_DAYS приростов требует MAX_DAYS+1 снапшотов (прирост считается между парами).
     const history = buildHistory(await loadRecentSnapshots(MAX_DAYS + 1));
-    const rows = buildRows(media, insights, durations, history.estFollowers);
+    const rows = buildRows(media, insights, durations);
 
     if (req.nextUrl.searchParams.get("dry") === "1") {
       return NextResponse.json({

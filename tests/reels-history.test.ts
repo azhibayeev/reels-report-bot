@@ -56,9 +56,8 @@ describe("buildHistory", () => {
   });
 
   it("returns nothing when there is less than one pair of snapshots", () => {
-    const empty = { dates: [], rows: [], estFollowers: {} };
-    expect(buildHistory([])).toEqual(empty);
-    expect(buildHistory([snap("2026-08-01", [["a", 1]])])).toEqual(empty);
+    expect(buildHistory([])).toEqual({ dates: [], rows: [] });
+    expect(buildHistory([snap("2026-08-01", [["a", 1]])])).toEqual({ dates: [], rows: [] });
   });
 
   it("caps the number of day columns and keeps the freshest ones", () => {
@@ -89,67 +88,6 @@ describe("buildHistory", () => {
     const m = buildHistory([snap("2026-08-03", [["a", 30]]), snap("2026-08-02", [["a", 10]])]);
     expect(m.dates).toEqual(["2026-08-03"]);
     expect(m.rows[0].gains).toEqual([20]);
-  });
-});
-
-// Снапшот с подписчиками — оценка приведённых подписчиков считается только по ним.
-function snapF(day: string, followers: number, reels: Array<[string, number]>): Snapshot {
-  return { ...snap(day, reels), followersCount: followers };
-}
-
-describe("estFollowers", () => {
-  it("splits the day's follower growth in proportion to that day's views", () => {
-    const m = buildHistory([
-      snapF("2026-08-01", 1000, [
-        ["a", 0],
-        ["b", 0],
-      ]),
-      snapF("2026-08-02", 1100, [
-        ["a", 300], // 75% дневных просмотров
-        ["b", 100], // 25%
-      ]),
-    ]);
-    expect(m.estFollowers).toEqual({ a: 75, b: 25 });
-  });
-
-  it("accumulates across days", () => {
-    const m = buildHistory([
-      snapF("2026-08-01", 1000, [["a", 0]]),
-      snapF("2026-08-02", 1010, [["a", 100]]),
-      snapF("2026-08-03", 1025, [["a", 200]]),
-    ]);
-    expect(m.estFollowers).toEqual({ a: 25 });
-  });
-
-  it("skips days the account lost followers instead of spreading the loss", () => {
-    const m = buildHistory([
-      snapF("2026-08-01", 1000, [["a", 0]]),
-      snapF("2026-08-02", 900, [["a", 500]]),
-    ]);
-    expect(m.estFollowers).toEqual({});
-  });
-
-  it("skips snapshots taken before followersCount existed", () => {
-    const m = buildHistory([snap("2026-08-01", [["a", 0]]), snapF("2026-08-02", 1100, [["a", 500]])]);
-    expect(m.estFollowers).toEqual({});
-  });
-
-  it("ignores a reel that lost views that day when splitting", () => {
-    const m = buildHistory([
-      snapF("2026-08-01", 1000, [
-        ["a", 100],
-        ["b", 100],
-      ]),
-      snapF("2026-08-02", 1050, [
-        ["a", 300],
-        ["b", 90], // счётчик пересмотрен вниз — в дележе не участвует
-      ]),
-    ]);
-    expect(m.estFollowers).toEqual({ a: 50 });
-  });
-
-  it("is empty when there is nothing to build from", () => {
-    expect(buildHistory([]).estFollowers).toEqual({});
   });
 });
 
