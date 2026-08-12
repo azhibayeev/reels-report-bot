@@ -119,7 +119,7 @@ describe("toSheetValues", () => {
     const values = toSheetValues([], new Date("2026-08-11T05:30:00Z"));
     expect(values).toHaveLength(1);
     expect(values[0].slice(0, HEADERS.length)).toEqual([...HEADERS]);
-    expect(values[0][HEADERS.length]).toBe("Обновлено: 2026-08-11 12:30 (WIB)");
+    expect(values[0][HEADERS.length]).toBe("Updated: 2026-08-11 12:30 (WIB)");
   });
 
   it("writes metrics as numbers and blanks as empty strings", () => {

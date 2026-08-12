@@ -44,28 +44,28 @@ const EMPTY_INSIGHT: ReelInsight = {
 };
 
 export const HEADERS = [
-  "№",
-  "Дата",
-  "Ссылка",
-  "Описание",
-  "Длительность, с",
-  "Просмотры",
-  "Охват",
-  "Лайки",
-  "Комментарии",
-  "Репосты",
-  "Сохранения",
-  "Всего реакций",
+  "#",
+  "Date",
+  "Link",
+  "Caption",
+  "Duration, s",
+  "Views",
+  "Reach",
+  "Likes",
+  "Comments",
+  "Shares",
+  "Saves",
+  "Total interactions",
   "ER %",
-  "Ср. досмотр, с",
-  "Досмотр, %",
+  "Avg watch time, s",
+  "Watch-through, %",
   "ID",
 ] as const;
 
 // Колонки, которые красим градиентом по вертикали (сравнение роликов между собой).
 // Идут подряд, поэтому храним как диапазон, а не как список.
-export const HEATMAP_FIRST_COL = "Просмотры";
-export const HEATMAP_LAST_COL = "Сохранения";
+export const HEATMAP_FIRST_COL = "Views";
+export const HEATMAP_LAST_COL = "Saves";
 
 // Полное описание ролика, но в одну строку: переводы строк схлопываем, иначе Sheets
 // растягивает строки таблицы по высоте и матрицу истории становится не прочитать.
@@ -131,7 +131,7 @@ export const roundTenth = (v: number): number => Math.round(v * 10) / 10;
 export function toSheetValues(rows: ReelRow[], updatedAt: Date): Array<Array<string | number>> {
   const stamp = jakartaStamp(updatedAt.toISOString());
   return [
-    [...HEADERS, `Обновлено: ${stamp} (WIB)`],
+    [...HEADERS, `Updated: ${stamp} (WIB)`],
     ...rows.map((r, i) => [
       i + 1,
       jakartaStamp(r.timestamp),

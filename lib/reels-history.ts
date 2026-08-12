@@ -86,16 +86,16 @@ export function dayHeader(dateKey: string): string {
 }
 
 export const HISTORY_HEADERS = [
-  "№",
-  "Дата публикации",
-  "Ссылка",
-  "Описание",
-  "Длительность, с",
-  "Всего просмотров",
+  "#",
+  "Published",
+  "Link",
+  "Caption",
+  "Duration, s",
+  "Total views",
 ] as const;
 
 /** Колонка «Всего просмотров» — красим тем же градиентом, что и метрики в Reels. */
-export const HISTORY_TOTAL_COL = "Всего просмотров";
+export const HISTORY_TOTAL_COL = "Total views";
 
 export function toHistoryValues(
   matrix: HistoryMatrix,
@@ -113,6 +113,6 @@ export function toHistoryValues(
       r.totalViews,
       ...r.gains.map((g) => (g == null ? "" : g)),
     ]),
-    [`Прирост просмотров за день · обновлено: ${jakartaStamp(updatedAt.toISOString())} (WIB)`],
+    [`Daily view gain · updated: ${jakartaStamp(updatedAt.toISOString())} (WIB)`],
   ];
 }

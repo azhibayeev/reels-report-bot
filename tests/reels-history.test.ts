@@ -128,6 +128,6 @@ describe("toHistoryValues", () => {
       buildHistory([snap("2026-08-01", [["a", 10]]), snap("2026-08-02", [["a", 20]])]),
       new Date("2026-08-02T05:30:00Z")
     );
-    expect(String(values[values.length - 1][0])).toContain("Прирост просмотров за день");
+    expect(String(values[values.length - 1][0])).toContain("Daily view gain");
   });
 });
