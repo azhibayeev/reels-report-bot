@@ -26,6 +26,10 @@
 1. **Telegram Bot API: скачивание ≤ 20 МБ, отправка ≤ 50 МБ.** Обойти нельзя.
    Реальные ролики — 400 МБ (проверено на `IMG_3418.MOV`, 398,8 МБ с iPhone).
    Поэтому видео попадает в систему не через бота, а через страницу загрузки.
+   Отдельно: отправка **по HTTP-ссылке ограничена 20 МБ** («5 MB max size for photos
+   and 20 MB max for other types of content»), полные 50 МБ доступны только при
+   загрузке файла через `multipart/form-data` с нашей стороны. Отсюда три способа
+   доставки результата, а не два.
 2. **Вебхука о завершении дубляжа у ElevenLabs нет** — только опрос статуса.
 3. **Минутный cron на Vercel Hobby недоступен** (аккаунт личный, существующие
    cron-задачи в репо — суточные и месячные). Опрос строится без cron.
@@ -65,7 +69,10 @@ GET /api/dub/tick?job=…
    ├─ опрашивает ElevenLabs каждые 10 с, живёт до ~240 с
    ├─ не готово → вызывает сам себя и выходит (обход лимита 300 с без cron)
    └─ dubbed → стримит MP4 из ElevenLabs в Blob
-              → шлёт в TG: ≤50 МБ файлом, больше — ссылкой
+              → шлёт в TG по размеру результата:
+                  ≤20 МБ  — sendVideo с Blob-ссылкой (Telegram качает сам)
+                  ≤50 МБ  — sendVideo загрузкой multipart через нашу функцию
+                  >50 МБ  — сообщение со ссылкой на Blob
               → удаляет исходник
 ```
 
@@ -82,7 +89,7 @@ GET /api/dub/tick?job=…
 | `app/api/dub/tick/route.ts` | Опрос, доставка результата, само-продление цепочки |
 | `app/api/cleanup/route.ts` | Суточный cron: чистка Blob, закрытие зависших задач |
 | `lib/elevenlabs.ts` | `createDub`, `getDubStatus`, `downloadDub`, `getSubscription` |
-| `lib/telegram.ts` | `sendMessage`, `sendVideoByUrl` |
+| `lib/telegram.ts` | `sendMessage`, `sendVideoByUrl`, `sendVideoUpload` |
 | `lib/jobs.ts` | Чтение и запись состояния задач в Blob |
 | `lib/tokens.ts` | Подпись и проверка HMAC-токенов |
 | `lib/credits.ts` | Оценка стоимости, выбор способа доставки |
@@ -135,7 +142,7 @@ GET /api/dub/tick?job=…
 Vitest, как в основном репо:
 
 - `estimateCredits(durationSec)` — округление, граница нуля;
-- `pickDelivery(sizeBytes)` — файл против ссылки на границе 50 МБ;
+- `pickDelivery(sizeBytes)` — три ветки доставки на границах 20 МБ и 50 МБ;
 - `signToken` / `verifyToken` — валидный, просроченный, подделанный, чужой chat_id;
 - разбор ответа статуса: `dubbed`, `dubbing`, `failed`;
 - роутер команд бота.
