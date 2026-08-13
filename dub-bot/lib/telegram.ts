@@ -16,7 +16,6 @@ export async function sendMessage(token: string, chatId: number, text: string): 
     JSON.stringify({
       chat_id: chatId,
       text,
-      parse_mode: "HTML",
       link_preview_options: { is_disabled: true },
     }),
     { "Content-Type": "application/json" }

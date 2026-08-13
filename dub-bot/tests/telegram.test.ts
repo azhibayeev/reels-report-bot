@@ -18,12 +18,14 @@ describe("sendMessage", () => {
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://api.telegram.org/botTOK/sendMessage");
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
     const body = JSON.parse(init.body as string);
     expect(body).toMatchObject({
       chat_id: 42,
       text: "привет",
       link_preview_options: { is_disabled: true },
     });
+    expect(body.parse_mode).toBeUndefined();
   });
 
   it("бросает ошибку со статусом, если Telegram отказал", async () => {
@@ -39,6 +41,7 @@ describe("sendVideoByUrl", () => {
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://api.telegram.org/botTOK/sendVideo");
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
     expect(JSON.parse(init.body as string)).toMatchObject({
       chat_id: 42,
       video: "https://blob/result.mp4",
@@ -54,6 +57,7 @@ describe("sendVideoUpload", () => {
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://api.telegram.org/botTOK/sendVideo");
+    expect(init.headers).toBeUndefined();
     const form = init.body as FormData;
     expect(form.get("chat_id")).toBe("42");
     expect(form.get("caption")).toBe("готово");
