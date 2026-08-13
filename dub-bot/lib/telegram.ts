@@ -53,6 +53,13 @@ export async function sendVideoUpload(
   form.append("chat_id", String(chatId));
   form.append("caption", caption);
   form.append("supports_streaming", "true");
-  form.append("video", new Blob([bytes], { type: "video/mp4" }), filename);
+  // Blob принимает только view поверх настоящего ArrayBuffer, а тип Uint8Array
+  // у вызывающей стороны допускает и SharedArrayBuffer — копируем данные в
+  // свежий ArrayBuffer, чтобы сузить тип на месте, не трогая сигнатуру.
+  const view: ArrayBuffer = bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength
+  ) as ArrayBuffer;
+  form.append("video", new Blob([view], { type: "video/mp4" }), filename);
   await call(api(token, "sendVideo"), form);
 }

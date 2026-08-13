@@ -36,7 +36,7 @@ vi.mock("@vercel/blob", () => ({
 
 import type { Job } from "../lib/jobs";
 
-const { runTick } = await import("../lib/tick");
+const { runTick, INVOCATION_BUDGET_MS, POLL_INTERVAL_MS } = await import("../lib/tick");
 
 function makeJob(overrides: Partial<Job> = {}): Job {
   return {
@@ -143,5 +143,31 @@ describe("runTick", () => {
 
     expect(getDubStatusMock).not.toHaveBeenCalled();
     expect(saveJobMock).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
+  });
+
+  it("продлевает цепочку через triggerTick, когда бюджет вызова исчерпан", async () => {
+    vi.useFakeTimers();
+    try {
+      loadJobMock.mockResolvedValue(makeJob());
+      // Дубляж всё ещё не готов — ни на одном опросе не встретится terminal-статус,
+      // поэтому цикл должен упереться в INVOCATION_BUDGET_MS, а не в него.
+      getDubStatusMock.mockResolvedValue({ status: "dubbing", error: null, durationSec: null });
+      const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 202 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const runPromise = runTick("job-1");
+      // Продвигаем время сразу за пределы бюджета вызова — этого достаточно, чтобы
+      // размотать всю цепочку sleep(POLL_INTERVAL_MS) внутри цикла опроса.
+      await vi.advanceTimersByTimeAsync(INVOCATION_BUDGET_MS + POLL_INTERVAL_MS);
+      await runPromise;
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const requestedUrl = String(fetchMock.mock.calls[0]?.[0]);
+      expect(requestedUrl).toContain("/api/dub/tick");
+      expect(requestedUrl).toContain("job=job-1");
+      expect(requestedUrl).toContain("key=");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

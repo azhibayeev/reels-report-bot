@@ -83,19 +83,42 @@ export async function runTick(jobId: string): Promise<void> {
       return;
     }
 
-    const status = await getDubStatus(apiKey, job.dubbingId);
+    let status;
+    try {
+      status = await getDubStatus(apiKey, job.dubbingId);
+    } catch (error) {
+      // Опрос ElevenLabs — штука нестабильная (сетевой сбой, временная 5xx).
+      // Не роняем всю цепочку из-за одного неудачного опроса: подождём и
+      // попробуем снова, а дедлайн наверху цикла всё равно ограничит попытки.
+      console.error("getDubStatus failed", jobId, error);
+      await sleep(POLL_INTERVAL_MS);
+      continue;
+    }
+
     if (status.status === "failed") {
       await failJob(job, `ElevenLabs не справился: ${status.error ?? "без деталей"}`);
       return;
     }
     if (status.status === "dubbed") {
-      await deliver(job);
+      try {
+        await deliver(job);
+      } catch (error) {
+        // Доставка — не то, что стоит повторять само по себе: повтор рискует
+        // прислать видео дважды. Сообщаем пользователю и закрываем задачу.
+        await failJob(job, `Готовый ролик не удалось доставить: ${(error as Error).message}`);
+      }
       return;
     }
 
     await sleep(POLL_INTERVAL_MS);
   }
 
-  // Бюджет вызова исчерпан — продлеваем цепочку новым вызовом.
-  await triggerTick(jobId);
+  // Бюджет вызова исчерпан — продлеваем цепочку новым вызовом. Если сам
+  // вызов не удался, эта попытка ничего больше сделать не может — ручная
+  // подстраховка на этот случай будет в /status.
+  try {
+    await triggerTick(jobId);
+  } catch (error) {
+    console.error("triggerTick failed", jobId, error);
+  }
 }
