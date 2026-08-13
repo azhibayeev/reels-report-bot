@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDub, getDubStatus, getSubscription } from "../lib/elevenlabs";
+import { createDub, downloadDub, getDubStatus, getSubscription } from "../lib/elevenlabs";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -90,5 +90,26 @@ describe("getDubStatus", () => {
       error: "no speech detected",
       durationSec: null,
     });
+  });
+});
+
+describe("downloadDub", () => {
+  it("возвращает сам Response объект, не буферизуя, и использует TARGET_LANG", async () => {
+    const response = new Response("video bytes");
+    const fetchMock = stubFetch(response);
+    const result = await downloadDub("k", "abc");
+
+    expect(result).toBe(response);
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toBe("https://api.elevenlabs.io/v1/dubbing/abc/audio/id");
+  });
+
+  it("пробрасывает статус и тело ошибки в одной ошибке", async () => {
+    stubFetch(
+      new Response("Access denied: invalid key", { status: 403 })
+    );
+    await expect(downloadDub("k", "abc")).rejects.toThrow(
+      /403.*Access denied: invalid key/
+    );
   });
 });
