@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { head } from "@vercel/blob";
 import { requireEnv } from "./config";
 import { estimateCredits, formatDuration } from "./credits";
 import { createDub, getSubscription } from "./elevenlabs";
@@ -21,6 +22,13 @@ export async function startDub(input: {
   const claim = verifyToken(input.token, requireEnv("DUB_TOKEN_SECRET"), Date.now());
   if (!claim) throw new Error("Ссылка просрочена — запроси новую через /dub");
   if (!isOwnBlobUrl(input.blobUrl)) throw new Error("Ссылка на файл не из нашего хранилища");
+
+  // Проверяем, что файл действительно в нашем хранилище, а не в чужом Vercel Blob.
+  try {
+    await head(input.blobUrl);
+  } catch {
+    throw new Error("Файл не найден в нашем хранилище");
+  }
 
   const apiKey = requireEnv("ELEVENLABS_API_KEY");
   const subscription = await getSubscription(apiKey);

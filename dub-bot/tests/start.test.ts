@@ -5,6 +5,7 @@ const createDubMock = vi.fn();
 const saveJobMock = vi.fn();
 const sendMessageMock = vi.fn();
 const triggerTickMock = vi.fn();
+const headMock = vi.fn();
 
 vi.mock("../lib/elevenlabs", () => ({
   getSubscription: (...a: unknown[]) => getSubscriptionMock(...a),
@@ -16,6 +17,7 @@ vi.mock("../lib/jobs", async (importOriginal) => ({
 }));
 vi.mock("../lib/telegram", () => ({ sendMessage: (...a: unknown[]) => sendMessageMock(...a) }));
 vi.mock("../lib/tick", () => ({ triggerTick: (...a: unknown[]) => triggerTickMock(...a) }));
+vi.mock("@vercel/blob", () => ({ head: (...a: unknown[]) => headMock(...a) }));
 
 const { isOwnBlobUrl, startDub } = await import("../lib/start");
 const { signToken } = await import("../lib/tokens");
@@ -29,6 +31,7 @@ beforeEach(() => {
   process.env.TELEGRAM_DUB_BOT_TOKEN = "tok";
   getSubscriptionMock.mockResolvedValue({ tier: "free", used: 0, limit: 10000, remaining: 10000 });
   createDubMock.mockResolvedValue("dub-1");
+  headMock.mockResolvedValue({ size: 1000, uploadedAt: new Date() });
 });
 
 afterEach(() => {
@@ -96,5 +99,29 @@ describe("startDub", () => {
     await expect(
       startDub({ token: freshToken(), blobUrl: BLOB, durationSec: 0 })
     ).resolves.toMatchObject({ jobId: expect.any(String) });
+  });
+
+  it("отказывает, если файл не из нашего хранилища — даже если ссылка на Vercel Blob", async () => {
+    const foreignBlob = "https://attacker999.public.blob.vercel-storage.com/video.mp4";
+    headMock.mockRejectedValue(new Error("Not found"));
+    await expect(
+      startDub({ token: freshToken(), blobUrl: foreignBlob, durationSec: 60 })
+    ).rejects.toThrow(/хранилищ/i);
+    expect(createDubMock).not.toHaveBeenCalled();
+  });
+
+  it("проверяет наличие файла в хранилище ДО запроса подписки", async () => {
+    const callOrder: string[] = [];
+    getSubscriptionMock.mockImplementation(() => {
+      callOrder.push("getSubscription");
+      return Promise.resolve({ tier: "free", used: 0, limit: 10000, remaining: 10000 });
+    });
+    headMock.mockImplementation(() => {
+      callOrder.push("head");
+      return Promise.resolve({ size: 1000, uploadedAt: new Date() });
+    });
+
+    await startDub({ token: freshToken(), blobUrl: BLOB, durationSec: 60 });
+    expect(callOrder).toEqual(["head", "getSubscription"]);
   });
 });
