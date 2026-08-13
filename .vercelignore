@@ -1,6 +1,8 @@
 # Рабочие материалы деки и локальные data-артефакты — не часть рантайма бота.
 # Next.js обслуживает только app/ и lib/.
 presentation/
+# Отдельный Vercel-проект со своими зависимостями: этому деплою он не нужен.
+dub-bot/
 comments-all.jsonl
 reels-meta.json
 halal-result.json
