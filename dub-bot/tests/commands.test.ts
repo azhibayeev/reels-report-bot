@@ -58,6 +58,24 @@ describe("handleCommand", () => {
     expect(triggerTick).toHaveBeenCalledWith("job-1");
   });
 
+  it("на /status показывает задачу в доставке", async () => {
+    const listJobs = vi.fn().mockResolvedValue([makeJob({ status: "delivering" })]);
+    const text = await handleCommand("status", 42, { ...deps, listJobs, triggerTick: vi.fn() });
+    expect(text).toContain("delivering");
+  });
+
+  it("на /status показывает список, даже если пинок опроса не прошёл", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const listJobs = vi.fn().mockResolvedValue([makeJob()]);
+    const triggerTick = vi.fn().mockRejectedValue(new Error("tick вернул 403"));
+
+    const text = await handleCommand("status", 42, { ...deps, listJobs, triggerTick });
+
+    expect(text).toContain("1:30");
+    expect(text).toContain("не удалось");
+    vi.restoreAllMocks();
+  });
+
   it("на /status не показывает чужие и завершённые задачи", async () => {
     const listJobs = vi.fn().mockResolvedValue([
       makeJob({ jobId: "other", chatId: 99 }),

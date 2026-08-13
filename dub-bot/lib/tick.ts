@@ -19,7 +19,11 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 export async function triggerTick(jobId: string): Promise<void> {
   const key = tickKey(jobId, requireEnv("DUB_TOKEN_SECRET"));
   const url = `${baseUrl()}/api/dub/tick?job=${encodeURIComponent(jobId)}&key=${key}`;
-  await fetch(url, { method: "POST", cache: "no-store" });
+  const res = await fetch(url, { method: "POST", cache: "no-store" });
+  // fetch не падает на 4xx/5xx: кривой DUB_BASE_URL (404), чужой ключ (403) или
+  // защита деплоя (401) без этой проверки выглядели бы как успех, а цепочка
+  // опроса при этом молча умирала бы.
+  if (!res.ok) throw new Error(`Не удалось запустить опрос: /api/dub/tick вернул ${res.status}`);
 }
 
 async function failJob(job: Job, message: string): Promise<void> {
@@ -30,6 +34,15 @@ async function failJob(job: Job, message: string): Promise<void> {
 async function deliver(job: Job): Promise<void> {
   const apiKey = requireEnv("ELEVENLABS_API_KEY");
   const botToken = requireEnv("TELEGRAM_DUB_BOT_TOKEN");
+
+  // Это НЕ блокировка: в Blob нет compare-and-set, две цепочки всё ещё могут
+  // проскочить обе. Но /status пинает tick по каждой активной задаче, и без
+  // перечитывания статуса окно двойной отправки равнялось бы шагу опроса (~10 с);
+  // с ранней отметкой «delivering» оно сжимается до ~1 с — времени между этим
+  // чтением и записью ниже.
+  const fresh = await loadJob(job.jobId);
+  if (!fresh || fresh.status !== "dubbing") return;
+  await saveJob({ ...fresh, status: "delivering" });
 
   // Тело ElevenLabs переливаем в Blob потоком: держать 100+ МБ в памяти незачем.
   const dubbed = await downloadDub(apiKey, job.dubbingId as string);
@@ -46,27 +59,27 @@ async function deliver(job: Job): Promise<void> {
 
   switch (pickDelivery(size)) {
     case "url":
-      await sendVideoByUrl(botToken, job.chatId, result.url, caption);
+      await sendVideoByUrl(botToken, fresh.chatId, result.url, caption);
       break;
     case "upload": {
       const res = await fetch(result.url, { cache: "no-store" });
       const bytes = new Uint8Array(await res.arrayBuffer());
-      await sendVideoUpload(botToken, job.chatId, bytes, `${job.jobId}.mp4`, caption);
+      await sendVideoUpload(botToken, fresh.chatId, bytes, `${fresh.jobId}.mp4`, caption);
       break;
     }
     case "link": {
       const mb = Math.round(size / 1024 / 1024);
       await sendMessage(
         botToken,
-        job.chatId,
+        fresh.chatId,
         `${caption}. Файл ${mb} МБ — это больше лимита Telegram, забирай по ссылке:\n${result.url}`
       );
       break;
     }
   }
 
-  await deleteBlob(job.sourceUrl);
-  await saveJob({ ...job, status: "done", resultUrl: result.url });
+  await deleteBlob(fresh.sourceUrl);
+  await saveJob({ ...fresh, status: "done", resultUrl: result.url });
 }
 
 export async function runTick(jobId: string): Promise<void> {

@@ -1,6 +1,8 @@
 import { del, list, put } from "@vercel/blob";
 
-export type JobStatus = "pending" | "dubbing" | "done" | "failed";
+// «delivering» — задача уже отдаётся в Telegram. Отдельный статус нужен, чтобы
+// вторая цепочка tick не отправила тот же ролик ещё раз.
+export type JobStatus = "pending" | "dubbing" | "delivering" | "done" | "failed";
 
 export interface Job {
   jobId: string;
@@ -24,7 +26,9 @@ export function jobPath(jobId: string): string {
 }
 
 export function isActive(job: Job): boolean {
-  return job.status === "pending" || job.status === "dubbing";
+  // Доставка тоже считается работой: /status должен такую задачу показывать,
+  // а чистка — не трогать её файлы.
+  return job.status === "pending" || job.status === "dubbing" || job.status === "delivering";
 }
 
 export async function saveJob(job: Job): Promise<void> {

@@ -53,8 +53,16 @@ export async function handleCommand(
   if (mine.length === 0) return "Задач в работе нет. Отправь /dub, чтобы начать.";
 
   // Заодно подталкиваем задачи: если цепочка опроса оборвалась, /status её оживит.
-  await Promise.all(mine.map((job) => deps.triggerTick(job.jobId)));
+  // Пинок может и не пройти (домен, секрет, защита деплоя) — тогда честно об этом
+  // пишем, но список задач всё равно показываем: он и есть ответ на /status.
+  const kicks = await Promise.allSettled(mine.map((job) => deps.triggerTick(job.jobId)));
+  const failed = kicks.filter((kick) => kick.status === "rejected");
+  for (const kick of failed) console.error("triggerTick failed", kick.reason);
 
   const lines = mine.map((job) => `• ${formatDuration(job.durationSec)} — ${job.status}`);
-  return [`В работе: ${mine.length}`, ...lines, "", "Пришлю, как будет готово."].join("\n");
+  const tail =
+    failed.length > 0
+      ? "Опрос перезапустить не удалось — попробуй /status ещё раз через минуту."
+      : "Пришлю, как будет готово.";
+  return [`В работе: ${mine.length}`, ...lines, "", tail].join("\n");
 }

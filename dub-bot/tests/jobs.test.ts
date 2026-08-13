@@ -77,6 +77,8 @@ describe("isActive", () => {
   it("активны только незавершённые задачи", () => {
     expect(isActive(makeJob({ status: "pending" }))).toBe(true);
     expect(isActive(makeJob({ status: "dubbing" }))).toBe(true);
+    // Задача в доставке ещё работает: /status её показывает, чистка не трогает.
+    expect(isActive(makeJob({ status: "delivering" }))).toBe(true);
     expect(isActive(makeJob({ status: "done" }))).toBe(false);
     expect(isActive(makeJob({ status: "failed" }))).toBe(false);
   });

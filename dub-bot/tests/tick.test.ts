@@ -36,7 +36,7 @@ vi.mock("@vercel/blob", () => ({
 
 import type { Job } from "../lib/jobs";
 
-const { runTick, INVOCATION_BUDGET_MS, POLL_INTERVAL_MS } = await import("../lib/tick");
+const { runTick, triggerTick, INVOCATION_BUDGET_MS, POLL_INTERVAL_MS } = await import("../lib/tick");
 
 function makeJob(overrides: Partial<Job> = {}): Job {
   return {
@@ -61,8 +61,22 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.clearAllMocks();
+  // Именно reset: часть тестов подменяет реализацию моков, и она не должна
+  // протекать в следующий тест.
+  vi.resetAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe("triggerTick", () => {
+  it("падает на не-2xx: иначе цепочка опроса умирает молча", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("forbidden", { status: 403 })));
+    await expect(triggerTick("job-1")).rejects.toThrow(/403/);
+  });
+
+  it("принимает 202 от самого роута tick", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 202 })));
+    await expect(triggerTick("job-1")).resolves.toBeUndefined();
+  });
 });
 
 describe("runTick", () => {
@@ -101,6 +115,51 @@ describe("runTick", () => {
     expect(saveJobMock).toHaveBeenCalledWith(
       expect.objectContaining({ status: "done", resultUrl: "https://blob/result.mp4" })
     );
+  });
+
+  it("помечает задачу delivering до первой отправки", async () => {
+    const order: string[] = [];
+    loadJobMock.mockResolvedValue(makeJob());
+    getDubStatusMock.mockResolvedValue({ status: "dubbed", error: null, durationSec: 60 });
+    downloadDubMock.mockResolvedValue(new Response("video-bytes"));
+    putMock.mockResolvedValue({ url: "https://blob/result.mp4" });
+    headMock.mockResolvedValue({ size: 5 * 1024 * 1024 });
+    saveJobMock.mockImplementation((job: Job) => void order.push(`save:${job.status}`));
+    sendVideoByUrlMock.mockImplementation(() => void order.push("send"));
+
+    await runTick("job-1");
+
+    expect(order).toEqual(["save:delivering", "send", "save:done"]);
+  });
+
+  it("вторая цепочка не отправляет ролик повторно: задача уже в доставке", async () => {
+    // Первое чтение — из runTick, второе — перепроверка внутри deliver: к этому
+    // моменту соседний tick уже успел отметить задачу как «delivering».
+    loadJobMock
+      .mockResolvedValueOnce(makeJob())
+      .mockResolvedValueOnce(makeJob({ status: "delivering" }));
+    getDubStatusMock.mockResolvedValue({ status: "dubbed", error: null, durationSec: 60 });
+
+    await runTick("job-1");
+
+    expect(downloadDubMock).not.toHaveBeenCalled();
+    expect(putMock).not.toHaveBeenCalled();
+    expect(sendVideoByUrlMock).not.toHaveBeenCalled();
+    expect(sendVideoUploadMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).not.toHaveBeenCalled();
+    expect(saveJobMock).not.toHaveBeenCalled();
+  });
+
+  it("после успешной доставки повтор ничего не шлёт заново", async () => {
+    loadJobMock
+      .mockResolvedValueOnce(makeJob())
+      .mockResolvedValueOnce(makeJob({ status: "done", resultUrl: "https://blob/result.mp4" }));
+    getDubStatusMock.mockResolvedValue({ status: "dubbed", error: null, durationSec: 60 });
+
+    await runTick("job-1");
+
+    expect(sendVideoByUrlMock).not.toHaveBeenCalled();
+    expect(deleteBlobMock).not.toHaveBeenCalled();
   });
 
   it("результат между 20 и 50 МБ грузит через функцию", async () => {
