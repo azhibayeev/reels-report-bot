@@ -1,8 +1,8 @@
 "use client";
 
 import { upload } from "@vercel/blob/client";
-import { useState } from "react";
-import { estimateCredits, formatDuration } from "../../../lib/credits";
+import { useEffect, useState } from "react";
+import { estimateCredits, formatDuration, isShortOfCredits } from "../../../lib/credits";
 
 type Stage = "idle" | "uploading" | "starting" | "done" | "error";
 
@@ -30,6 +30,26 @@ export default function UploadForm({ token }: { token: string }) {
   const [progress, setProgress] = useState(0);
   const [stage, setStage] = useState<Stage>("idle");
   const [message, setMessage] = useState("");
+  const [remaining, setRemaining] = useState<number | null>(null);
+
+  // Остаток кредитов виден до выбора файла: иначе про нехватку узнаёшь только
+  // после того, как 400 МБ уже уехали в хранилище.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/balance?token=${encodeURIComponent(token)}`);
+        if (!res.ok) return;
+        const data = (await res.json()) as { remaining?: number };
+        if (!cancelled && typeof data.remaining === "number") setRemaining(data.remaining);
+      } catch {
+        // Баланс справочный: не показать его лучше, чем сломать страницу.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   async function onPick(picked: File | null) {
     setFile(picked);
@@ -66,6 +86,7 @@ export default function UploadForm({ token }: { token: string }) {
   }
 
   const credits = estimateCredits(durationSec);
+  const short = isShortOfCredits(credits, remaining);
 
   return (
     <div>
@@ -78,14 +99,25 @@ export default function UploadForm({ token }: { token: string }) {
 
       {file && durationSec > 0 && (
         <p>
-          Длительность {formatDuration(durationSec)} — примерно {credits} кредитов.
+          Длительность {formatDuration(durationSec)} — примерно {credits} кредитов
+          {remaining !== null && `, у тебя осталось ${remaining}`}.
         </p>
       )}
       {file && durationSec === 0 && <p>Длительность не определилась — посчитаю на сервере.</p>}
+      {!file && remaining !== null && <p>Осталось {remaining} кредитов ElevenLabs.</p>}
+
+      {short && (
+        <p style={{ color: "crimson" }}>
+          Кредитов не хватит: нужно {credits}, осталось {remaining}. Возьми ролик короче или
+          пополни тариф ElevenLabs — загружать этот файл смысла нет.
+        </p>
+      )}
 
       <button
         onClick={() => void onSubmit()}
-        disabled={!file || stage === "uploading" || stage === "starting" || stage === "done"}
+        disabled={
+          !file || short || stage === "uploading" || stage === "starting" || stage === "done"
+        }
       >
         Дублировать
       </button>

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   estimateCredits,
   formatDuration,
+  isShortOfCredits,
   pickDelivery,
   TELEGRAM_UPLOAD_LIMIT,
   TELEGRAM_URL_LIMIT,
@@ -28,6 +29,22 @@ describe("formatDuration", () => {
     expect(formatDuration(192)).toBe("3:12");
     expect(formatDuration(9)).toBe("0:09");
     expect(formatDuration(0)).toBe("0:00");
+  });
+});
+
+describe("isShortOfCredits", () => {
+  it("ловит нехватку до загрузки файла", () => {
+    expect(isShortOfCredits(6400, 1000)).toBe(true);
+  });
+
+  it("ровно впритык — это ещё не нехватка", () => {
+    expect(isShortOfCredits(1000, 1000)).toBe(false);
+    expect(isShortOfCredits(999, 1000)).toBe(false);
+  });
+
+  it("не блокирует, когда остаток неизвестен или длительность не прочиталась", () => {
+    expect(isShortOfCredits(6400, null)).toBe(false);
+    expect(isShortOfCredits(0, 0)).toBe(false);
   });
 });
 

@@ -22,6 +22,14 @@ export function formatDuration(sec: number): string {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
+// Отказ по кредитам прилетает только после загрузки всего файла, поэтому цену
+// сверяем с остатком ещё в браузере. null — баланс не загрузился, а неизвестный
+// остаток и нулевая оценка не повод блокировать загрузку.
+export function isShortOfCredits(needed: number, remaining: number | null): boolean {
+  if (remaining === null || needed <= 0) return false;
+  return needed > remaining;
+}
+
 export function pickDelivery(sizeBytes: number): Delivery {
   if (sizeBytes <= TELEGRAM_URL_LIMIT) return "url";
   if (sizeBytes <= TELEGRAM_UPLOAD_LIMIT) return "upload";
