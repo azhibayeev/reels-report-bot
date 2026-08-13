@@ -3,7 +3,7 @@ import { head } from "@vercel/blob";
 import { requireEnv } from "./config";
 import { estimateCredits, formatDuration } from "./credits";
 import { createDub, getSubscription } from "./elevenlabs";
-import { Job, saveJob } from "./jobs";
+import { deleteBlob, Job, saveJob } from "./jobs";
 import { sendMessage } from "./telegram";
 import { triggerTick } from "./tick";
 import { verifyToken } from "./tokens";
@@ -23,6 +23,11 @@ export async function startDub(input: {
   if (!claim) throw new Error("Ссылка просрочена — запроси новую через /dub");
   if (!isOwnBlobUrl(input.blobUrl)) throw new Error("Ссылка на файл не из нашего хранилища");
 
+  // Переменные окружения читаем до подтверждения файла: их отсутствие — поломка
+  // конфигурации, и падать на ней надо раньше, чем начнётся уборка за собой.
+  const apiKey = requireEnv("ELEVENLABS_API_KEY");
+  const botToken = requireEnv("TELEGRAM_DUB_BOT_TOKEN");
+
   // Проверяем, что файл действительно в нашем хранилище, а не в чужом Vercel Blob.
   try {
     await head(input.blobUrl);
@@ -30,7 +35,48 @@ export async function startDub(input: {
     throw new Error("Файл не найден в нашем хранилище");
   }
 
-  const apiKey = requireEnv("ELEVENLABS_API_KEY");
+  // Файл уже целиком лежит в нашем Blob, а записи о задаче ещё нет. Чистка ходит
+  // только по dub/jobs/, поэтому любой отказ ниже без явного удаления оставил бы
+  // 400 МБ висеть в хранилище навсегда — и на free-тарифе отказ случается чаще
+  // удачного запуска.
+  let created: { job: Job; tier: string };
+  try {
+    created = await createJob(apiKey, claim.chatId, input);
+  } catch (error) {
+    await deleteBlob(input.blobUrl);
+    throw error;
+  }
+
+  const note = created.tier === "free" ? " Тариф free — будет водяной знак." : "";
+  await sendMessage(
+    botToken,
+    claim.chatId,
+    `Взял в работу: ${formatDuration(input.durationSec)}.${note} Пришлю готовый ролик сюда.`
+  );
+
+  try {
+    await triggerTick(created.job.jobId);
+  } catch (error) {
+    // Задача уже сохранена, поэтому её добьёт /status. Промолчать нельзя:
+    // пользователь остался бы с «взял в работу» по задаче, которая не двигается.
+    console.error("triggerTick failed", created.job.jobId, error);
+    await sendMessage(
+      botToken,
+      claim.chatId,
+      "Не смог запустить опрос ElevenLabs. Отправь /status — он подхватит задачу."
+    );
+  }
+
+  return { jobId: created.job.jobId };
+}
+
+// Всё, что делается после подтверждения файла и до записи задачи в Blob: любой
+// отказ здесь означает осиротевший исходник, поэтому вынесено в один блок.
+async function createJob(
+  apiKey: string,
+  chatId: number,
+  input: { blobUrl: string; durationSec: number }
+): Promise<{ job: Job; tier: string }> {
   const subscription = await getSubscription(apiKey);
 
   // При неизвестной длительности оценка равна нулю — проверку пропускаем,
@@ -51,7 +97,7 @@ export async function startDub(input: {
 
   const job: Job = {
     jobId,
-    chatId: claim.chatId,
+    chatId,
     dubbingId,
     sourceUrl: input.blobUrl,
     resultUrl: null,
@@ -61,14 +107,5 @@ export async function startDub(input: {
     error: null,
   };
   await saveJob(job);
-
-  const note = subscription.tier === "free" ? " Тариф free — будет водяной знак." : "";
-  await sendMessage(
-    requireEnv("TELEGRAM_DUB_BOT_TOKEN"),
-    claim.chatId,
-    `Взял в работу: ${formatDuration(input.durationSec)}.${note} Пришлю готовый ролик сюда.`
-  );
-
-  await triggerTick(jobId);
-  return { jobId };
+  return { job, tier: subscription.tier };
 }

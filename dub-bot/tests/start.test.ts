@@ -6,6 +6,7 @@ const saveJobMock = vi.fn();
 const sendMessageMock = vi.fn();
 const triggerTickMock = vi.fn();
 const headMock = vi.fn();
+const deleteBlobMock = vi.fn();
 
 vi.mock("../lib/elevenlabs", () => ({
   getSubscription: (...a: unknown[]) => getSubscriptionMock(...a),
@@ -14,6 +15,7 @@ vi.mock("../lib/elevenlabs", () => ({
 vi.mock("../lib/jobs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/jobs")>()),
   saveJob: (...a: unknown[]) => saveJobMock(...a),
+  deleteBlob: (...a: unknown[]) => deleteBlobMock(...a),
 }));
 vi.mock("../lib/telegram", () => ({ sendMessage: (...a: unknown[]) => sendMessageMock(...a) }));
 vi.mock("../lib/tick", () => ({ triggerTick: (...a: unknown[]) => triggerTickMock(...a) }));
@@ -35,7 +37,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.clearAllMocks();
+  // reset, а не clear: тесты подменяют реализацию моков, и она не должна
+  // протекать в соседние тесты (значения по умолчанию ставит beforeEach).
+  vi.resetAllMocks();
+  vi.restoreAllMocks();
 });
 
 function freshToken(chatId = 42) {
@@ -108,6 +113,51 @@ describe("startDub", () => {
       startDub({ token: freshToken(), blobUrl: foreignBlob, durationSec: 60 })
     ).rejects.toThrow(/хранилищ/i);
     expect(createDubMock).not.toHaveBeenCalled();
+  });
+
+  it("удаляет загруженный исходник, когда не хватает кредитов", async () => {
+    getSubscriptionMock.mockResolvedValue({ tier: "free", used: 9800, limit: 10000, remaining: 200 });
+
+    await expect(
+      startDub({ token: freshToken(), blobUrl: BLOB, durationSec: 60 })
+    ).rejects.toThrow(/кредит/i);
+
+    // Задачи нет, а значит cleanup этот файл уже не найдёт: удалить его больше некому.
+    expect(deleteBlobMock).toHaveBeenCalledWith(BLOB);
+  });
+
+  it("удаляет исходник, если ElevenLabs не принял задачу", async () => {
+    createDubMock.mockRejectedValue(new Error("ElevenLabs createDub failed (400)"));
+
+    await expect(
+      startDub({ token: freshToken(), blobUrl: BLOB, durationSec: 60 })
+    ).rejects.toThrow(/createDub/);
+
+    expect(deleteBlobMock).toHaveBeenCalledWith(BLOB);
+  });
+
+  it("не трогает исходник, когда задача успешно создана", async () => {
+    await startDub({ token: freshToken(), blobUrl: BLOB, durationSec: 60 });
+    expect(deleteBlobMock).not.toHaveBeenCalled();
+  });
+
+  it("не удаляет чужой файл: отказ до проверки владения обходится без удаления", async () => {
+    await expect(
+      startDub({ token: freshToken(), blobUrl: "https://evil.example/v.mp4", durationSec: 60 })
+    ).rejects.toThrow(/ссылк/i);
+    expect(deleteBlobMock).not.toHaveBeenCalled();
+  });
+
+  it("сохраняет задачу и зовёт на помощь /status, если опрос не запустился", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    triggerTickMock.mockRejectedValue(new Error("tick вернул 403"));
+
+    const { jobId } = await startDub({ token: freshToken(), blobUrl: BLOB, durationSec: 60 });
+
+    // Задача осталась в Blob — иначе /status нечего было бы подхватывать.
+    expect(saveJobMock).toHaveBeenCalledWith(expect.objectContaining({ jobId }));
+    expect(deleteBlobMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).toHaveBeenCalledWith("tok", 42, expect.stringContaining("/status"));
   });
 
   it("проверяет наличие файла в хранилище ДО запроса подписки", async () => {
