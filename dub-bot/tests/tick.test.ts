@@ -1,0 +1,147 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const loadJobMock = vi.fn();
+const saveJobMock = vi.fn();
+const deleteBlobMock = vi.fn();
+const getDubStatusMock = vi.fn();
+const downloadDubMock = vi.fn();
+const sendMessageMock = vi.fn();
+const sendVideoByUrlMock = vi.fn();
+const sendVideoUploadMock = vi.fn();
+const putMock = vi.fn();
+const headMock = vi.fn();
+
+vi.mock("../lib/jobs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/jobs")>()),
+  loadJob: (...a: unknown[]) => loadJobMock(...a),
+  saveJob: (...a: unknown[]) => saveJobMock(...a),
+  deleteBlob: (...a: unknown[]) => deleteBlobMock(...a),
+}));
+vi.mock("../lib/elevenlabs", () => ({
+  getDubStatus: (...a: unknown[]) => getDubStatusMock(...a),
+  downloadDub: (...a: unknown[]) => downloadDubMock(...a),
+  TARGET_LANG: "id",
+}));
+vi.mock("../lib/telegram", () => ({
+  sendMessage: (...a: unknown[]) => sendMessageMock(...a),
+  sendVideoByUrl: (...a: unknown[]) => sendVideoByUrlMock(...a),
+  sendVideoUpload: (...a: unknown[]) => sendVideoUploadMock(...a),
+}));
+vi.mock("@vercel/blob", () => ({
+  put: (...a: unknown[]) => putMock(...a),
+  head: (...a: unknown[]) => headMock(...a),
+  list: vi.fn(),
+  del: vi.fn(),
+}));
+
+import type { Job } from "../lib/jobs";
+
+const { runTick } = await import("../lib/tick");
+
+function makeJob(overrides: Partial<Job> = {}): Job {
+  return {
+    jobId: "job-1",
+    chatId: 42,
+    dubbingId: "dub-1",
+    sourceUrl: "https://blob/source.mov",
+    resultUrl: null,
+    status: "dubbing",
+    durationSec: 60,
+    createdAt: new Date().toISOString(),
+    error: null,
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  process.env.ELEVENLABS_API_KEY = "key";
+  process.env.TELEGRAM_DUB_BOT_TOKEN = "tok";
+  process.env.DUB_TOKEN_SECRET = "secret";
+  process.env.DUB_BASE_URL = "https://dub.example";
+});
+
+afterEach(() => {
+  vi.clearAllMocks();
+  vi.unstubAllGlobals();
+});
+
+describe("runTick", () => {
+  it("ничего не делает для уже завершённой задачи", async () => {
+    loadJobMock.mockResolvedValue(makeJob({ status: "done" }));
+    await runTick("job-1");
+    expect(getDubStatusMock).not.toHaveBeenCalled();
+  });
+
+  it("сообщает об ошибке дубляжа и закрывает задачу", async () => {
+    loadJobMock.mockResolvedValue(makeJob());
+    getDubStatusMock.mockResolvedValue({ status: "failed", error: "no speech", durationSec: null });
+
+    await runTick("job-1");
+
+    expect(sendMessageMock).toHaveBeenCalledWith("tok", 42, expect.stringContaining("no speech"));
+    expect(saveJobMock).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
+  });
+
+  it("маленький результат отдаёт ссылкой", async () => {
+    loadJobMock.mockResolvedValue(makeJob());
+    getDubStatusMock.mockResolvedValue({ status: "dubbed", error: null, durationSec: 60 });
+    downloadDubMock.mockResolvedValue(new Response("video-bytes"));
+    putMock.mockResolvedValue({ url: "https://blob/result.mp4" });
+    headMock.mockResolvedValue({ size: 5 * 1024 * 1024 });
+
+    await runTick("job-1");
+
+    expect(sendVideoByUrlMock).toHaveBeenCalledWith(
+      "tok",
+      42,
+      "https://blob/result.mp4",
+      expect.any(String)
+    );
+    expect(deleteBlobMock).toHaveBeenCalledWith("https://blob/source.mov");
+    expect(saveJobMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "done", resultUrl: "https://blob/result.mp4" })
+    );
+  });
+
+  it("результат между 20 и 50 МБ грузит через функцию", async () => {
+    loadJobMock.mockResolvedValue(makeJob());
+    getDubStatusMock.mockResolvedValue({ status: "dubbed", error: null, durationSec: 60 });
+    downloadDubMock.mockResolvedValue(new Response("video-bytes"));
+    putMock.mockResolvedValue({ url: "https://blob/result.mp4" });
+    headMock.mockResolvedValue({ size: 30 * 1024 * 1024 });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(new Uint8Array([1, 2, 3]))));
+
+    await runTick("job-1");
+
+    expect(sendVideoUploadMock).toHaveBeenCalled();
+    expect(sendVideoByUrlMock).not.toHaveBeenCalled();
+  });
+
+  it("слишком большой результат отдаёт ссылкой текстом", async () => {
+    loadJobMock.mockResolvedValue(makeJob());
+    getDubStatusMock.mockResolvedValue({ status: "dubbed", error: null, durationSec: 60 });
+    downloadDubMock.mockResolvedValue(new Response("video-bytes"));
+    putMock.mockResolvedValue({ url: "https://blob/result.mp4" });
+    headMock.mockResolvedValue({ size: 80 * 1024 * 1024 });
+
+    await runTick("job-1");
+
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      "tok",
+      42,
+      expect.stringContaining("https://blob/result.mp4")
+    );
+    expect(sendVideoUploadMock).not.toHaveBeenCalled();
+  });
+
+  it("сдаётся, если задача висит дольше получаса", async () => {
+    loadJobMock.mockResolvedValue(
+      makeJob({ createdAt: new Date(Date.now() - 31 * 60 * 1000).toISOString() })
+    );
+
+    await runTick("job-1");
+
+    expect(getDubStatusMock).not.toHaveBeenCalled();
+    expect(saveJobMock).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
+  });
+});
