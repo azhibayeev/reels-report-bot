@@ -1,6 +1,29 @@
-import { describe, expect, it } from "vitest";
-import { RETENTION_MS, staleJobs } from "../lib/cleanup";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const listJobsMock = vi.fn();
+const saveJobMock = vi.fn();
+const deleteBlobMock = vi.fn();
+const sendMessageMock = vi.fn();
+const delMock = vi.fn();
+
+vi.mock("../lib/jobs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/jobs")>()),
+  listJobs: (...a: unknown[]) => listJobsMock(...a),
+  saveJob: (...a: unknown[]) => saveJobMock(...a),
+  deleteBlob: (...a: unknown[]) => deleteBlobMock(...a),
+}));
+vi.mock("../lib/telegram", () => ({ sendMessage: (...a: unknown[]) => sendMessageMock(...a) }));
+vi.mock("@vercel/blob", () => ({
+  del: (...a: unknown[]) => delMock(...a),
+  put: vi.fn(),
+  list: vi.fn(),
+  head: vi.fn(),
+}));
+
 import type { Job } from "../lib/jobs";
+
+const { cleanup, hungJobs, RETENTION_MS, staleJobs } = await import("../lib/cleanup");
+const { JOB_DEADLINE_MS } = await import("../lib/tick");
 
 const NOW = Date.parse("2026-08-13T12:00:00.000Z");
 
@@ -19,6 +42,14 @@ function makeJob(overrides: Partial<Job> = {}): Job {
   };
 }
 
+beforeEach(() => {
+  process.env.TELEGRAM_DUB_BOT_TOKEN = "tok";
+});
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
+
 describe("staleJobs", () => {
   it("не трогает свежие задачи", () => {
     expect(staleJobs([makeJob()], NOW)).toEqual([]);
@@ -29,11 +60,81 @@ describe("staleJobs", () => {
     expect(staleJobs([old], NOW)).toHaveLength(1);
   });
 
-  it("не удаляет активную задачу, даже если она старая — её добьёт дедлайн", () => {
+  it("не удаляет файлы активной задачи, даже если она старая", () => {
     const stuck = makeJob({
       status: "dubbing",
       createdAt: new Date(NOW - RETENTION_MS - 1).toISOString(),
     });
     expect(staleJobs([stuck], NOW)).toEqual([]);
+  });
+
+  it("считает задачу в доставке активной и не сносит её файлы", () => {
+    const delivering = makeJob({
+      status: "delivering",
+      createdAt: new Date(NOW - RETENTION_MS - 1).toISOString(),
+    });
+    expect(staleJobs([delivering], NOW)).toEqual([]);
+  });
+});
+
+describe("hungJobs", () => {
+  it("закрывает активную задачу старше дедлайна — внутри tick добивать её уже некому", () => {
+    const stuck = makeJob({
+      status: "dubbing",
+      createdAt: new Date(NOW - JOB_DEADLINE_MS - 1).toISOString(),
+    });
+    expect(hungJobs([stuck], NOW)).toHaveLength(1);
+  });
+
+  it("не трогает свежую активную задачу — она ещё в работе", () => {
+    const fresh = makeJob({
+      status: "dubbing",
+      createdAt: new Date(NOW - 60_000).toISOString(),
+    });
+    expect(hungJobs([fresh], NOW)).toEqual([]);
+  });
+
+  it("не трогает завершённые задачи, как бы стары они ни были", () => {
+    const old = makeJob({ createdAt: new Date(NOW - RETENTION_MS - 1).toISOString() });
+    expect(hungJobs([old], NOW)).toEqual([]);
+  });
+});
+
+describe("cleanup", () => {
+  it("зависшую задачу помечает failed, пишет владельцу и удаляет исходник", async () => {
+    listJobsMock.mockResolvedValue([
+      makeJob({ status: "dubbing", createdAt: new Date(NOW - JOB_DEADLINE_MS - 1).toISOString() }),
+    ]);
+
+    const result = await cleanup(NOW);
+
+    expect(result).toEqual({ removed: 0, closed: 1 });
+    expect(sendMessageMock).toHaveBeenCalledWith("tok", 42, expect.stringContaining("завис"));
+    expect(saveJobMock).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
+    expect(deleteBlobMock).toHaveBeenCalledWith("https://blob/source.mov");
+  });
+
+  it("свежую активную задачу оставляет в покое", async () => {
+    listJobsMock.mockResolvedValue([makeJob({ status: "dubbing" })]);
+
+    const result = await cleanup(NOW);
+
+    expect(result).toEqual({ removed: 0, closed: 0 });
+    expect(saveJobMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).not.toHaveBeenCalled();
+    expect(delMock).not.toHaveBeenCalled();
+  });
+
+  it("удаляет файлы завершённой задачи старше суток", async () => {
+    listJobsMock.mockResolvedValue([
+      makeJob({ createdAt: new Date(NOW - RETENTION_MS - 1).toISOString() }),
+    ]);
+
+    const result = await cleanup(NOW);
+
+    expect(result).toEqual({ removed: 1, closed: 0 });
+    expect(delMock).toHaveBeenCalledWith("https://blob/source.mov");
+    expect(delMock).toHaveBeenCalledWith("https://blob/result.mp4");
+    expect(delMock).toHaveBeenCalledWith("dub/jobs/job-1.json");
   });
 });
