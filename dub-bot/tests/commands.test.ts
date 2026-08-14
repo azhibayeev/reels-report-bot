@@ -11,6 +11,7 @@ function makeJob(overrides: Partial<Job> = {}): Job {
     resultUrl: null,
     status: "dubbing",
     durationSec: 90,
+    deliveringAt: null,
     createdAt: new Date().toISOString(),
     error: null,
     ...overrides,

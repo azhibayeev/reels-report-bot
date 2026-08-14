@@ -103,6 +103,7 @@ async function createJob(
     resultUrl: null,
     status: "dubbing",
     durationSec: input.durationSec,
+    deliveringAt: null,
     createdAt: new Date().toISOString(),
     error: null,
   };

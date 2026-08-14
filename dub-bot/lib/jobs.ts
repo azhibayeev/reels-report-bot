@@ -13,6 +13,12 @@ export interface Job {
   status: JobStatus;
   /** Ноль означает, что браузер не смог прочитать длительность файла. */
   durationSec: number;
+  /**
+   * Когда началась текущая доставка (ISO), `null` — если доставка не идёт.
+   * Нужна, чтобы отличить живую доставку от брошенной: вызов функции умирает
+   * молча, и без отметки времени задача осталась бы в «delivering» навсегда.
+   */
+  deliveringAt: string | null;
   createdAt: string;
   error: string | null;
 }

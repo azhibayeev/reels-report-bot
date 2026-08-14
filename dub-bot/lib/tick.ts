@@ -11,6 +11,15 @@ export const POLL_INTERVAL_MS = 10_000;
 export const INVOCATION_BUDGET_MS = 240_000;
 // Дольше получаса ждать нечего: либо ElevenLabs завис, либо ролик неподъёмный.
 export const JOB_DEADLINE_MS = 30 * 60 * 1000;
+// Доставке нужен собственный бюджет, а не хвост чужого: скачать результат из
+// ElevenLabs, перелить его в Blob и выгрузить 50 МБ в Telegram за остаток
+// вызова нереально, а оборванная на середине доставка оставляет задачу
+// помеченной «delivering». Поэтому начинаем её только с таким запасом.
+export const DELIVERY_RESERVE_MS = 120_000;
+// Ни один вызов функции не живёт дольше 300 с (maxDuration роута), значит
+// доставка с более старой отметкой точно мертва — её можно перехватить, а
+// живую этот порог перехватить не даст никогда.
+export const DELIVERY_TAKEOVER_MS = 300_000;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -31,6 +40,17 @@ async function failJob(job: Job, message: string): Promise<void> {
   await saveJob({ ...job, status: "failed", error: message });
 }
 
+// Отметки может не быть вовсе — у задач, сохранённых до появления поля, или
+// если запись «delivering» прошла старым кодом. Такую доставку считаем начатой
+// неизвестно когда, то есть брошенной: иначе задача застряла бы в «delivering»
+// навсегда, потому что выхода вперёд у этого статуса нет.
+export function isAbandonedDelivery(job: Job, nowMs: number): boolean {
+  if (!job.deliveringAt) return true;
+  const startedAt = Date.parse(job.deliveringAt);
+  if (Number.isNaN(startedAt)) return true;
+  return nowMs - startedAt > DELIVERY_TAKEOVER_MS;
+}
+
 async function deliver(job: Job): Promise<void> {
   const apiKey = requireEnv("ELEVENLABS_API_KEY");
   const botToken = requireEnv("TELEGRAM_DUB_BOT_TOKEN");
@@ -39,10 +59,15 @@ async function deliver(job: Job): Promise<void> {
   // проскочить обе. Но /status пинает tick по каждой активной задаче, и без
   // перечитывания статуса окно двойной отправки равнялось бы шагу опроса (~10 с);
   // с ранней отметкой «delivering» оно сжимается до ~1 с — времени между этим
-  // чтением и записью ниже.
+  // чтением и записью ниже. Вторая половина правила — перехват: доставка,
+  // начатая дольше DELIVERY_TAKEOVER_MS назад, не могла пережить свой вызов,
+  // и отдать ролик заново лучше, чем не отдать вовсе. На «done» и «failed»
+  // выходим сразу: там результат уже решён.
   const fresh = await loadJob(job.jobId);
-  if (!fresh || fresh.status !== "dubbing") return;
-  await saveJob({ ...fresh, status: "delivering" });
+  if (!fresh) return;
+  const takeover = fresh.status === "delivering" && isAbandonedDelivery(fresh, Date.now());
+  if (fresh.status !== "dubbing" && !takeover) return;
+  await saveJob({ ...fresh, status: "delivering", deliveringAt: new Date().toISOString() });
 
   // Тело ElevenLabs переливаем в Blob потоком: держать 100+ МБ в памяти незачем.
   const dubbed = await downloadDub(apiKey, job.dubbingId as string);
@@ -79,7 +104,7 @@ async function deliver(job: Job): Promise<void> {
   }
 
   await deleteBlob(fresh.sourceUrl);
-  await saveJob({ ...fresh, status: "done", resultUrl: result.url });
+  await saveJob({ ...fresh, status: "done", resultUrl: result.url, deliveringAt: null });
 }
 
 export async function runTick(jobId: string): Promise<void> {
@@ -113,6 +138,17 @@ export async function runTick(jobId: string): Promise<void> {
       return;
     }
     if (status.status === "dubbed") {
+      // Доставку начинаем только с полным запасом времени. Иначе она упрётся в
+      // лимит функции уже с записанной отметкой «delivering» — а раньше такой
+      // обрыв лечился сам собой, следующим тиком.
+      if (INVOCATION_BUDGET_MS - (Date.now() - startedAt) < DELIVERY_RESERVE_MS) {
+        try {
+          await triggerTick(jobId);
+        } catch (error) {
+          console.error("triggerTick failed", jobId, error);
+        }
+        return;
+      }
       try {
         await deliver(job);
       } catch (error) {

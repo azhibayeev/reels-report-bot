@@ -36,7 +36,14 @@ vi.mock("@vercel/blob", () => ({
 
 import type { Job } from "../lib/jobs";
 
-const { runTick, triggerTick, INVOCATION_BUDGET_MS, POLL_INTERVAL_MS } = await import("../lib/tick");
+const {
+  runTick,
+  triggerTick,
+  DELIVERY_RESERVE_MS,
+  DELIVERY_TAKEOVER_MS,
+  INVOCATION_BUDGET_MS,
+  POLL_INTERVAL_MS,
+} = await import("../lib/tick");
 
 function makeJob(overrides: Partial<Job> = {}): Job {
   return {
@@ -47,6 +54,7 @@ function makeJob(overrides: Partial<Job> = {}): Job {
     resultUrl: null,
     status: "dubbing",
     durationSec: 60,
+    deliveringAt: null,
     createdAt: new Date().toISOString(),
     error: null,
     ...overrides,
@@ -132,12 +140,95 @@ describe("runTick", () => {
     expect(order).toEqual(["save:delivering", "send", "save:done"]);
   });
 
+  it("записывает время начала доставки вместе с отметкой delivering", async () => {
+    loadJobMock.mockResolvedValue(makeJob());
+    getDubStatusMock.mockResolvedValue({ status: "dubbed", error: null, durationSec: 60 });
+    downloadDubMock.mockResolvedValue(new Response("video-bytes"));
+    putMock.mockResolvedValue({ url: "https://blob/result.mp4" });
+    headMock.mockResolvedValue({ size: 5 * 1024 * 1024 });
+
+    await runTick("job-1");
+
+    const marked = saveJobMock.mock.calls[0]?.[0] as Job;
+    expect(marked.status).toBe("delivering");
+    expect(Number.isNaN(Date.parse(marked.deliveringAt as string))).toBe(false);
+  });
+
+  it("не начинает доставку на остатке бюджета — передаёт её свежему вызову", async () => {
+    vi.useFakeTimers();
+    try {
+      loadJobMock.mockResolvedValue(makeJob());
+      const startedAt = Date.now();
+      // Готовность приходит поздно: к этому моменту до конца бюджета вызова
+      // остаётся меньше DELIVERY_RESERVE_MS, и доставка бы не успела.
+      getDubStatusMock.mockImplementation(() =>
+        Promise.resolve(
+          Date.now() - startedAt > INVOCATION_BUDGET_MS - DELIVERY_RESERVE_MS
+            ? { status: "dubbed", error: null, durationSec: 60 }
+            : { status: "dubbing", error: null, durationSec: null }
+        )
+      );
+      const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 202 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const runPromise = runTick("job-1");
+      await vi.advanceTimersByTimeAsync(INVOCATION_BUDGET_MS + POLL_INTERVAL_MS);
+      await runPromise;
+
+      expect(saveJobMock).not.toHaveBeenCalled();
+      expect(downloadDubMock).not.toHaveBeenCalled();
+      expect(sendVideoByUrlMock).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/dub/tick");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("не перехватывает доставку, начатую только что", async () => {
+    loadJobMock
+      .mockResolvedValueOnce(makeJob())
+      .mockResolvedValueOnce(
+        makeJob({ status: "delivering", deliveringAt: new Date().toISOString() })
+      );
+    getDubStatusMock.mockResolvedValue({ status: "dubbed", error: null, durationSec: 60 });
+
+    await runTick("job-1");
+
+    expect(downloadDubMock).not.toHaveBeenCalled();
+    expect(sendVideoByUrlMock).not.toHaveBeenCalled();
+    expect(saveJobMock).not.toHaveBeenCalled();
+  });
+
+  it("перехватывает доставку, брошенную дольше времени жизни вызова назад", async () => {
+    loadJobMock.mockResolvedValueOnce(makeJob()).mockResolvedValueOnce(
+      makeJob({
+        status: "delivering",
+        deliveringAt: new Date(Date.now() - DELIVERY_TAKEOVER_MS - 1000).toISOString(),
+      })
+    );
+    getDubStatusMock.mockResolvedValue({ status: "dubbed", error: null, durationSec: 60 });
+    downloadDubMock.mockResolvedValue(new Response("video-bytes"));
+    putMock.mockResolvedValue({ url: "https://blob/result.mp4" });
+    headMock.mockResolvedValue({ size: 5 * 1024 * 1024 });
+
+    await runTick("job-1");
+
+    expect(sendVideoByUrlMock).toHaveBeenCalledWith(
+      "tok",
+      42,
+      "https://blob/result.mp4",
+      expect.any(String)
+    );
+    expect(saveJobMock).toHaveBeenCalledWith(expect.objectContaining({ status: "done" }));
+  });
+
   it("вторая цепочка не отправляет ролик повторно: задача уже в доставке", async () => {
     // Первое чтение — из runTick, второе — перепроверка внутри deliver: к этому
     // моменту соседний tick уже успел отметить задачу как «delivering».
     loadJobMock
       .mockResolvedValueOnce(makeJob())
-      .mockResolvedValueOnce(makeJob({ status: "delivering" }));
+      .mockResolvedValueOnce(makeJob({ status: "delivering", deliveringAt: new Date().toISOString() }));
     getDubStatusMock.mockResolvedValue({ status: "dubbed", error: null, durationSec: 60 });
 
     await runTick("job-1");

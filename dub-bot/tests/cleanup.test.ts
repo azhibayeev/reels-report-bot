@@ -22,7 +22,9 @@ vi.mock("@vercel/blob", () => ({
 
 import type { Job } from "../lib/jobs";
 
-const { cleanup, hungJobs, RETENTION_MS, staleJobs } = await import("../lib/cleanup");
+const { cleanup, hungJobs, HUNG_JOB_MESSAGE, RETENTION_MS, staleJobs } = await import(
+  "../lib/cleanup"
+);
 const { JOB_DEADLINE_MS } = await import("../lib/tick");
 
 const NOW = Date.parse("2026-08-13T12:00:00.000Z");
@@ -36,6 +38,7 @@ function makeJob(overrides: Partial<Job> = {}): Job {
     resultUrl: "https://blob/result.mp4",
     status: "done",
     durationSec: 60,
+    deliveringAt: null,
     createdAt: new Date(NOW).toISOString(),
     error: null,
     ...overrides,
@@ -109,7 +112,7 @@ describe("cleanup", () => {
     const result = await cleanup(NOW);
 
     expect(result).toEqual({ removed: 0, closed: 1 });
-    expect(sendMessageMock).toHaveBeenCalledWith("tok", 42, expect.stringContaining("завис"));
+    expect(sendMessageMock).toHaveBeenCalledWith("tok", 42, HUNG_JOB_MESSAGE);
     expect(saveJobMock).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
     expect(deleteBlobMock).toHaveBeenCalledWith("https://blob/source.mov");
   });
