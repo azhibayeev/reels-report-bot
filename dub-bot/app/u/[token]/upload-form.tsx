@@ -103,7 +103,14 @@ export default function UploadForm({ token }: { token: string }) {
           {remaining !== null && `, у тебя осталось ${remaining}`}.
         </p>
       )}
-      {file && durationSec === 0 && <p>Длительность не определилась — посчитаю на сервере.</p>}
+      {/* Остаток показываем и здесь: без длительности оценка недоступна, и баланс
+          остаётся единственным сигналом о цене — прятать его как раз тут нельзя. */}
+      {file && durationSec === 0 && (
+        <p>
+          Длительность не определилась — посчитаю на сервере.
+          {remaining !== null && ` Осталось ${remaining} кредитов ElevenLabs.`}
+        </p>
+      )}
       {!file && remaining !== null && <p>Осталось {remaining} кредитов ElevenLabs.</p>}
 
       {short && (
