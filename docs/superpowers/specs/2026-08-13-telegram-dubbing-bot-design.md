@@ -68,7 +68,12 @@ POST /api/dub/start
 GET /api/dub/tick?job=…
    ├─ опрашивает ElevenLabs каждые 10 с, живёт до ~240 с
    ├─ не готово → вызывает сам себя и выходит (обход лимита 300 с без cron)
-   └─ dubbed → стримит MP4 из ElevenLabs в Blob
+   └─ dubbed → если до конца бюджета меньше 2 минут, откладывает доставку
+                на свежий вызов: заливка и отправка 50 МБ в остаток бюджета
+                не укладываются
+              → помечает задачу статусом delivering, чтобы вторая цепочка
+                (например, после /status) не отправила тот же ролик дважды
+              → стримит MP4 из ElevenLabs в Blob
               → шлёт в TG по размеру результата:
                   ≤20 МБ  — sendVideo с Blob-ссылкой (Telegram качает сам)
                   ≤50 МБ  — sendVideo загрузкой multipart через нашу функцию
@@ -102,10 +107,16 @@ GET /api/dub/tick?job=…
 {
   "jobId": "…", "chatId": 123, "dubbingId": "…",
   "sourceUrl": "…", "resultUrl": null,
-  "status": "pending | dubbing | done | failed",
-  "durationSec": 192, "createdAt": "…", "error": null
+  "status": "pending | dubbing | delivering | done | failed",
+  "durationSec": 192, "createdAt": "…",
+  "deliveringAt": null, "error": null
 }
 ```
+
+`delivering` — не блокировка: Blob не умеет compare-and-set. Это лишь узкое окно
+плюс правило перехвата — если `deliveringAt` старше пяти минут, значит вызов,
+который взялся доставлять, умер, и задачу можно забрать. Без перехвата упавшая
+доставка запирала бы задачу навсегда.
 
 Токены загрузки — HMAC от `chatId` и срока годности, без хранения в Blob.
 
