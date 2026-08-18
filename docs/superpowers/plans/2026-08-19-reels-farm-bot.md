@@ -6,7 +6,7 @@
 
 **Architecture:** Всё живёт в существующем проекте `reels-report-bot` (корень репозитория) и в существующем боте отчётов: у бота Telegram может быть только один вебхук, а отдельный проект потребовал бы второй копии IG-токена. Новый код изолирован в `lib/farm/*` и `app/api/farm/*`, существующие модули не переписываются — единственная правка живого кода — вынос диспетчера команд из `app/api/telegram/route.ts`. Состояние хранится файлами в Blob под префиксом `farm/`, без БД, по образцу `dub-bot`. Долгая работа режется на цепочки самовызовов с бюджетом на вызов.
 
-**Tech Stack:** Next.js 16 (App Router, runtime nodejs), TypeScript, `@vercel/blob` v2, vitest, `ffmpeg-static` + `ffprobe-static`, Instagram API with Instagram Login (`graph.instagram.com`), Telegram Bot API.
+**Tech Stack:** Next.js 16 (App Router, runtime nodejs), TypeScript, `@vercel/blob` v2, vitest, `ffmpeg-static` + `ffprobe-static`, Instagram Graph API через Facebook Login (`graph.facebook.com`) для публикации, Telegram Bot API. Отчётный бот при этом остаётся на Instagram Login (`graph.instagram.com`) — ферма его токен не трогает.
 
 **Spec:** `docs/superpowers/specs/2026-08-19-reels-farm-bot-design.md`
 
@@ -26,7 +26,7 @@
 - Стиль хука: `fontsize=64`, `fontcolor=white`, `borderw=6`, `bordercolor=black@0.9`, `line_spacing=12`, `x=(w-text_w)/2`, `y=h*0.18`. Значения предварительные, калибруются по эталонному ролику.
 - Текст хука передаётся в `drawtext` через `textfile=`, не в строке фильтра.
 - Исходник удаляется сразу после успешного рендера; готовый ролик — после успешной публикации.
-- Trial: контейнер `media_type=REELS` + `trial_params={"graduation_strategy":"MANUAL"}`.
+- Trial: контейнер `media_type=REELS` + `trial_params={"graduation_strategy":"MANUAL"}` на `https://graph.facebook.com/v23.0` (проверено 19.08.2026), токен `FARM_IG_TOKEN`, аккаунт `FARM_IG_ID`.
 - Заливка, оборвавшаяся после `media_publish`, **не повторяется** — ролик уходит в `failed` с просьбой проверить ленту.
 - Уборка: `posted`/`rejected`/`failed` старше 3 дней; `review`/`editing` старше 7 дней; застрявшие `rendering`/`posting` старше 30 минут.
 - Никаких `git commit`/`push` внутри задач сверх шагов «Commit», описанных в плане. Коммит — по одному на задачу.
@@ -64,44 +64,30 @@
 
 ---
 
-### Task 0: Проверка `trial_params` (спайк, до всякого кода)
+### Task 0: Проверка `trial_params` — ВЫПОЛНЕНО 19.08.2026
 
-Выход задачи — ответ, а не код. Пока он не получен, Task 8 писать нельзя: возможен переезд с `graph.instagram.com` на `graph.facebook.com`.
+Выход задачи — ответ, а не код. Ответ получен, задача закрыта.
 
-**Files:** только запись результата в спеку.
+**Что сделано.** На `graph.facebook.com/v23.0/17841413773053161/media` (аккаунт
+`daristeppe`, связанная страница Facebook — «Видео из Фото») создано два контейнера:
+A без `trial_params`, B с `{"graduation_strategy":"MANUAL"}`. Оба вернули `id`
+(`18163114942459102` и `18163114945459102`). `media_publish` не вызывался — контейнеры
+истекли сами, на аккаунте ничего не появилось.
 
-- [ ] **Step 1: Убедиться, что токен умеет публиковать**
+**Токен проверки** — User Token из Graph API Explorer, приложение `1732393271246702`,
+среди прав присутствует `instagram_content_publish`. App Review не потребовался:
+публикация идёт на собственный аккаунт при роли админа приложения.
 
-```bash
-curl -s "https://graph.instagram.com/v23.0/me?fields=id,username&access_token=$IG_ACCESS_TOKEN"
-```
-Ожидание: JSON с `id` и `username`. Ошибка `190` означает, что токен не перевыдан — остановиться и сказать человеку.
+**Следствия для плана:**
 
-- [ ] **Step 2: Создать контейнер с trial_params и НЕ публиковать его**
+- Task 8 пишется под `graph.facebook.com`, а не `graph.instagram.com`.
+- Ферма получает собственный токен `FARM_IG_TOKEN` и `FARM_IG_ID`; `IG_ACCESS_TOKEN`
+  и `IG_USER_ID` остаются отчётному боту нетронутыми.
+- Добавлена Task 8b: обмен короткого токена на долгоживущий и его хранение.
+- ~~Проверка Instagram Login~~ не нужна: путь Facebook Login работает.
 
-```bash
-curl -s -X POST "https://graph.instagram.com/v23.0/$IG_USER_ID/media" \
-  -d "media_type=REELS" \
-  -d "video_url=https://<любой публичный mp4 из вашего Blob>" \
-  -d "caption=probe" \
-  -d 'trial_params={"graduation_strategy":"MANUAL"}' \
-  -d "access_token=$IG_ACCESS_TOKEN"
-```
-Ожидание успеха: `{"id":"<containerId>"}`. Контейнер истекает через 24 часа сам; `media_publish` НЕ вызывать.
-
-- [ ] **Step 3: Записать вывод и решение**
-
-Ответ с `id` → путь Instagram Login подтверждён, Task 8 пишется как в плане.
-Ошибка про неизвестный параметр или отсутствие прав → Task 8 переписывается на `graph.facebook.com` (Instagram Graph API с Facebook Login), и это требует отдельной авторизации через страницу Facebook. В этом случае остановиться и вернуться к человеку.
-
-- [ ] **Step 4: Commit результата в спеку**
-
-Заменить пункт про `trial_params` в разделе «Открытые пункты» спеки на фактический результат с датой.
-
-```bash
-git add docs/superpowers/specs/2026-08-19-reels-farm-bot-design.md
-git commit -m "docs: зафиксировать результат проверки trial_params"
-```
+- [x] Проверка выполнена
+- [x] Результат записан в спеку (раздел «Открытые пункты»)
 
 ---
 
@@ -1205,7 +1191,7 @@ git commit -m "feat(farm): видео с кнопками, правка подп
 
 ### Task 8: Публикация в Trial Reels
 
-Задача пишется **только после Task 0**. Если проверка показала, что `graph.instagram.com` не принимает `trial_params`, базовый URL и способ авторизации меняются — остановиться и вернуться к человеку.
+Task 0 закрыта: базовый URL — **`https://graph.facebook.com/v23.0`**, токен — `FARM_IG_TOKEN`, id аккаунта — `FARM_IG_ID`. Проверено на живом аккаунте, `trial_params` принимается.
 
 **Files:**
 - Create: `lib/farm/instagram.ts`
@@ -1285,7 +1271,9 @@ Expected: FAIL — модуля нет.
 
 ```ts
 // lib/farm/instagram.ts
-const G = "https://graph.instagram.com/v23.0";
+// Facebook Login, а не graph.instagram.com: trial_params живёт здесь — проверено
+// на живом аккаунте 19.08.2026, оба контейнера создались.
+const G = "https://graph.facebook.com/v23.0";
 
 export interface PublishDeps {
   token: string;
@@ -1383,6 +1371,174 @@ Expected: PASS.
 ```bash
 git add lib/farm/instagram.ts tests/farm-instagram.test.ts
 git commit -m "feat(farm): публикация ролика в Trial Reels через контейнер"
+```
+
+---
+
+### Task 8b: Долгоживущий токен публикации
+
+Токен из Graph API Explorer живёт час-два. Ферме нужен постоянный, иначе заливка встанет в первый же вечер.
+
+**Files:**
+- Create: `lib/farm/token.ts`
+- Test: `tests/farm-token.test.ts`
+
+**Interfaces:**
+- Consumes: ничего.
+- Produces: `exchangeForLongLived(shortToken, appId, appSecret): Promise<string>`, `fetchPageToken(userToken, igId): Promise<string>`, `checkToken(token): Promise<{ valid: boolean; expiresAt: number | null; scopes: string[] }>`.
+
+- [ ] **Step 1: Написать падающий тест**
+
+```ts
+// tests/farm-token.test.ts
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { checkToken, exchangeForLongLived, fetchPageToken } from "../lib/farm/token";
+
+beforeEach(() => vi.unstubAllGlobals());
+
+describe("exchangeForLongLived", () => {
+  it("меняет короткий токен на 60-дневный", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ access_token: "LONG", expires_in: 5184000 })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await exchangeForLongLived("SHORT", "APP", "SECRET")).toBe("LONG");
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("grant_type=fb_exchange_token");
+    expect(url).toContain("fb_exchange_token=SHORT");
+  });
+
+  it("отказ отдаёт текст ошибки наружу", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { message: "bad secret" } }), { status: 400 })));
+    await expect(exchangeForLongLived("S", "A", "X")).rejects.toThrow(/bad secret/);
+  });
+});
+
+describe("fetchPageToken", () => {
+  it("берёт токен той страницы, к которой привязан нужный IG-аккаунт", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      data: [
+        { name: "Другая", access_token: "PT_OTHER", instagram_business_account: { id: "111" } },
+        { name: "Видео из Фото", access_token: "PT_RIGHT", instagram_business_account: { id: "17841413773053161" } },
+      ],
+    }))));
+
+    expect(await fetchPageToken("LONG", "17841413773053161")).toBe("PT_RIGHT");
+  });
+
+  it("нужного аккаунта нет среди страниц — внятная ошибка, а не пустая строка", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ data: [] }))));
+    await expect(fetchPageToken("LONG", "17841413773053161")).rejects.toThrow(/не найден/);
+  });
+});
+
+describe("checkToken", () => {
+  it("возвращает срок и права", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      data: { is_valid: true, expires_at: 1766000000, scopes: ["instagram_basic", "instagram_content_publish"] },
+    }))));
+
+    const info = await checkToken("T");
+    expect(info.valid).toBe(true);
+    expect(info.scopes).toContain("instagram_content_publish");
+  });
+
+  it("бессрочный Page-токен отдаёт expires_at = 0 — это не «истёк»", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ data: { is_valid: true, expires_at: 0, scopes: [] } }))));
+    const info = await checkToken("T");
+    expect(info.valid).toBe(true);
+    expect(info.expiresAt).toBeNull();
+  });
+});
+```
+
+- [ ] **Step 2: Запустить и убедиться, что падает**
+
+Run: `npx vitest run tests/farm-token.test.ts`
+Expected: FAIL — модуля нет.
+
+- [ ] **Step 3: Реализовать**
+
+```ts
+// lib/farm/token.ts
+const G = "https://graph.facebook.com/v23.0";
+
+async function readError(res: Response): Promise<string> {
+  const text = await res.text();
+  try {
+    return (JSON.parse(text) as { error?: { message?: string } }).error?.message || text;
+  } catch {
+    return text;
+  }
+}
+
+export async function exchangeForLongLived(
+  shortToken: string,
+  appId: string,
+  appSecret: string
+): Promise<string> {
+  const url =
+    `${G}/oauth/access_token?grant_type=fb_exchange_token` +
+    `&client_id=${encodeURIComponent(appId)}` +
+    `&client_secret=${encodeURIComponent(appSecret)}` +
+    `&fb_exchange_token=${encodeURIComponent(shortToken)}`;
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Обмен токена не прошёл: ${await readError(res)}`);
+  const { access_token: token } = (await res.json()) as { access_token?: string };
+  if (!token) throw new Error("Обмен токена не прошёл: в ответе нет access_token");
+  return token;
+}
+
+// Page-токен, полученный по долгоживущему пользовательскому, не истекает вовсе —
+// это и есть то, что кладётся в FARM_IG_TOKEN.
+export async function fetchPageToken(userToken: string, igId: string): Promise<string> {
+  const res = await fetch(
+    `${G}/me/accounts?fields=name,access_token,instagram_business_account&limit=100&access_token=${encodeURIComponent(userToken)}`,
+    { cache: "no-store" }
+  );
+  if (!res.ok) throw new Error(`Список страниц не пришёл: ${await readError(res)}`);
+  const { data } = (await res.json()) as {
+    data?: { access_token?: string; instagram_business_account?: { id?: string } }[];
+  };
+  const page = (data ?? []).find((p) => p.instagram_business_account?.id === igId);
+  if (!page?.access_token) throw new Error(`Аккаунт ${igId} не найден среди страниц этого токена`);
+  return page.access_token;
+}
+
+export async function checkToken(token: string): Promise<{
+  valid: boolean;
+  expiresAt: number | null;
+  scopes: string[];
+}> {
+  const res = await fetch(
+    `${G}/debug_token?input_token=${encodeURIComponent(token)}&access_token=${encodeURIComponent(token)}`,
+    { cache: "no-store" }
+  );
+  if (!res.ok) return { valid: false, expiresAt: null, scopes: [] };
+  const { data } = (await res.json()) as {
+    data?: { is_valid?: boolean; expires_at?: number; scopes?: string[] };
+  };
+  // expires_at = 0 у бессрочных токенов: это не «истёк вчера», а «не истекает».
+  const expires = data?.expires_at;
+  return {
+    valid: Boolean(data?.is_valid),
+    expiresAt: expires ? expires * 1000 : null,
+    scopes: data?.scopes ?? [],
+  };
+}
+```
+
+- [ ] **Step 4: Встроить проверку в суточную уборку**
+
+В `runDaily` (Task 13) добавить вызов `checkToken(process.env.FARM_IG_TOKEN)`: невалидный токен или срок меньше 7 дней — сообщение в чат. Молча умерший токен останавливает заливку навсегда, и узнать об этом через неделю — худший из сценариев.
+
+- [ ] **Step 5: Прогнать тесты и закоммитить**
+
+Run: `npm test`
+Expected: PASS.
+
+```bash
+git add lib/farm/token.ts tests/farm-token.test.ts
+git commit -m "feat(farm): обмен на долгоживущий токен публикации и проверка срока"
 ```
 
 ---
@@ -2005,7 +2161,7 @@ git commit -m "feat(farm): апрув кнопками, правка описа�
 - Test: `tests/farm-post.test.ts`
 
 **Interfaces:**
-- Consumes: `createTrialContainer`/`waitForContainer`/`publishContainer`/`fetchPermalink` (Task 8), `listItems`/`saveItem`/`loadItem`/`deleteBlobQuiet` (Task 4), `isAbandoned` (Task 10), `resolveToken` из `lib/token.ts`.
+- Consumes: `createTrialContainer`/`waitForContainer`/`publishContainer`/`fetchPermalink` (Task 8), `listItems`/`saveItem`/`loadItem`/`deleteBlobQuiet` (Task 4), `isAbandoned` (Task 10), `FARM_IG_TOKEN`/`FARM_IG_ID` из env (Task 8b).
 - Produces: `pickDue(items: Item[], nowMs: number): Item | null`, `postOne(item, deps): Promise<void>`, `runPostTick(deps): Promise<void>`.
 
 - [ ] **Step 1: Написать падающий тест**
@@ -2126,7 +2282,7 @@ git commit -m "feat(farm): заливка ролика по наступивше
 - Test: `tests/farm-daily.test.ts`
 
 **Interfaces:**
-- Consumes: `listItems`/`saveItem`/`deleteBlobQuiet`/`isActive`/`SOURCES_PREFIX` (Task 4), `isAbandoned` (Task 10), `pickDue`/`postOne` (Task 12), `resolveToken` из `lib/token.ts`.
+- Consumes: `listItems`/`saveItem`/`deleteBlobQuiet`/`isActive`/`SOURCES_PREFIX` (Task 4), `isAbandoned` (Task 10), `pickDue`/`postOne` (Task 12), `checkToken` (Task 8b).
 - Produces: `classifyForCleanup(items, nowMs): { purge: Item[]; expire: Item[]; unstick: Item[] }`, `runDaily(deps): Promise<{ purged: number; expired: number; unstuck: number; caughtUp: number }>`.
 
 - [ ] **Step 1: Написать падающий тест**
@@ -2203,7 +2359,7 @@ export function classifyForCleanup(items: Item[], nowMs: number): {
 }
 ```
 
-`runDaily` дополнительно: продлевает токен вызовом `resolveToken()`, при отказе пишет в чат (молча умерший токен останавливает заливку навсегда); для `unstick` со статусом `posting` сообщение прямо просит проверить ленту; удаляет подложки под `farm/sources/`, у которых нет живой задачи; добирает просроченные `queued` через `pickDue`/`postOne`.
+`runDaily` дополнительно: проверяет токен публикации через `checkToken` и при невалидности или сроке меньше 7 дней пишет в чат (молча умерший токен останавливает заливку навсегда); для `unstick` со статусом `posting` сообщение прямо просит проверить ленту; удаляет подложки под `farm/sources/`, у которых нет живой задачи; добирает просроченные `queued` через `pickDue`/`postOne`.
 
 - [ ] **Step 4: Крон, шрифт и документация**
 
@@ -2217,7 +2373,7 @@ export function classifyForCleanup(items: Item[], nowMs: number): {
 }
 ```
 
-Положить `assets/hook.ttf` (жирный sans с латиницей: Montserrat ExtraBold или Inter Bold). В `SETUP.md` добавить раздел «Ферма рилсов»: перевыдача токена с `instagram_business_content_publish`, новые переменные `FARM_TOKEN_SECRET`, `FARM_SLOT_START`, `FARM_SLOT_MINUTES`, `FARM_SLOTS_PER_DAY`, `FARM_TZ`, настройка внешнего таймера на `/api/farm/post?key=...` раз в 15 минут и напоминание, что оба слота крона Hobby после этого заняты.
+Положить `assets/hook.ttf` (жирный sans с латиницей: Montserrat ExtraBold или Inter Bold). В `SETUP.md` добавить раздел «Ферма рилсов»: получение токена публикации через Graph API Explorer с обменом на бессрочный Page-токен (Task 8b), новые переменные `FARM_TOKEN_SECRET`, `FARM_IG_TOKEN`, `FARM_IG_ID`, `FARM_FB_APP_ID`, `FARM_FB_APP_SECRET`, `FARM_SLOT_START`, `FARM_SLOT_MINUTES`, `FARM_SLOTS_PER_DAY`, `FARM_TZ`, настройка внешнего таймера на `/api/farm/post?key=...` раз в 15 минут и напоминание, что оба слота крона Hobby после этого заняты.
 
 - [ ] **Step 5: Прогнать тесты и закоммитить**
 
