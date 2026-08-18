@@ -33,8 +33,9 @@ description: Use when an approved spec or plan must be implemented under hard mu
 
 ## Шаг 1. Реализация — воркфлоу `hard-build`
 
-Запускать **по `scriptPath`, не по имени**: `.claude/workflows/` в проекте харнесс
-не регистрирует, по имени находятся только встроенные воркфлоу.
+Запуск по имени: `Workflow({ name: 'hard-build', args: {...} })`. Если имя не
+находится — список воркфлоу подхватывается не мгновенно после создания файла;
+тогда тот же запуск по `scriptPath`, как ниже.
 
 ```
 Workflow({ scriptPath: '<корень репозитория>/.claude/workflows/hard-build.js', args: {
