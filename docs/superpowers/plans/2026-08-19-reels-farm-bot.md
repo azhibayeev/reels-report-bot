@@ -17,13 +17,15 @@
 - Тест-команда проекта: `npm test` (vitest, `include: ["tests/**/*.test.ts"]`, environment node). Тесты фермы лежат в `tests/farm-*.test.ts`.
 - Ни ffmpeg, ни Instagram, ни Telegram, ни Blob в тестах не вызываются по-настоящему: раннеры и `fetch` инжектируются или мокаются.
 - Комментарии — на русском и только там, где объясняют неочевидное решение (стиль `dub-bot` и корневого проекта). Комментарии-подписи к очевидным строкам не пишем.
-- Валидация входа: блоков текста = числу файлов; хук ≤ 3 строк по ≤ 20 знаков; описание ≤ 2200 знаков; файл ≤ 60 МБ; пачка ≤ 1 ГБ; файлов ≤ 50.
+- Валидация входа: блоков текста = числу файлов; хук ≤ 3 строк по ≤ 26 знаков; описание ≤ 2200 знаков; файл ≤ 60 МБ; пачка ≤ 1 ГБ; файлов ≤ 50.
 - Подпись к видео в Telegram: лимит 1024 знака, описание в подписи обрезается до 700.
 - Слоты публикации: старт 09:00, интервал 45 минут, 15 слотов в день, зона `Asia/Jakarta`, ближайший слот не раньше чем через 5 минут.
 - Бюджет вызова рендера: 240 000 мс, резерв на один ролик 150 000 мс, `maxDuration = 300`.
 - Брошенной считается работа с отметкой `renderingAt`/`postingAt` старше 300 000 мс.
 - ffmpeg: `-t 90`, `libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -r 30`, `-c:a aac -b:a 128k`, `-movflags +faststart`, кадр `1080×1920` через `scale=...:force_original_aspect_ratio=increase` + `crop`.
-- Стиль хука: `fontsize=64`, `fontcolor=white`, `borderw=6`, `bordercolor=black@0.9`, `line_spacing=12`, `x=(w-text_w)/2`, `y=h*0.18`. Значения предварительные, калибруются по эталонному ролику.
+- Стиль хука (откалиброван по эталону `top2.mp4` 19.08): шрифт Montserrat Bold, `fontsize=54`, `fontcolor=white`, `borderw=3`, `bordercolor=black`, `shadowcolor=black@0.5`, `shadowx=2`, `shadowy=3`, `line_spacing=10`, `expansion=none` — без него drawtext раскрывает текст, прочитанный из textfile, и хук с процентом («100% gratis») роняет рендер с ошибкой «Stray % near ...» (проверено на бинарнике `ffmpeg-static` 6.0 из репозитория). Строка — до 26 знаков, до 3 строк.
+- Позиция хука — три пресета на пачку: верх `h*0.18` (дефолт), центр `h*0.42`, низ `h*0.62`.
+- Каждая строка хука центрируется отдельно: свой `drawtext` на строку, `text_align` в ffmpeg 6.0 отсутствует.
 - Текст хука передаётся в `drawtext` через `textfile=`, не в строке фильтра.
 - Исходник удаляется сразу после успешного рендера; готовый ролик — после успешной публикации.
 - Trial: контейнер `media_type=REELS` + `trial_params={"graduation_strategy":"MANUAL"}` на `https://graph.facebook.com/v23.0` (проверено 19.08.2026), токен `FARM_IG_TOKEN`, аккаунт `FARM_IG_ID`.
@@ -119,9 +121,12 @@ describe("parseBlocks", () => {
   });
 
   it("переносит \\r\\n и терпит лишние разделители и пустые блоки", () => {
-    const { pairs, errors } = parseBlocks("Хук\r\nОписание\r\n---\n---\n\n---\nХук два\nОписание два\n");
+    const { pairs, errors } = parseBlocks("Хук\r\nСтрока1\r\nСтрока2\r\n---\n---\n\n---\nХук два\nОписание два\n");
     expect(errors).toEqual([]);
-    expect(pairs).toHaveLength(2);
+    expect(pairs).toEqual([
+      { hook: "Хук", caption: "Строка1\nСтрока2" },
+      { hook: "Хук два", caption: "Описание два" },
+    ]);
   });
 
   it("блок без описания — ошибка с номером блока", () => {
@@ -273,7 +278,7 @@ git commit -m "feat(farm): типы фермы и разбор блоков ху
 
 **Interfaces:**
 - Consumes: ничего.
-- Produces: `wrapHook(hook: string, maxChars?: number, maxLines?: number): string[] | null`, константы `HOOK_LINE_CHARS = 20`, `HOOK_MAX_LINES = 3`.
+- Produces: `wrapHook(hook: string, maxChars?: number, maxLines?: number): string[] | null`, константы `HOOK_LINE_CHARS = 26`, `HOOK_MAX_LINES = 3`.
 
 - [ ] **Step 1: Написать падающий тест**
 
@@ -285,12 +290,14 @@ import { HOOK_LINE_CHARS, wrapHook } from "../lib/farm/wrap";
 describe("wrapHook", () => {
   it("режет по словам, не превышая лимит строки", () => {
     const lines = wrapHook("Jangan tunggu Ramadan untuk mulai");
-    expect(lines).toEqual(["Jangan tunggu", "Ramadan untuk mulai"]);
+    expect(lines).toEqual(["Jangan tunggu Ramadan", "untuk mulai"]);
     for (const line of lines!) expect(line.length).toBeLessThanOrEqual(HOOK_LINE_CHARS);
   });
 
   it("не влезающий в 3 строки хук отвергается", () => {
-    expect(wrapHook("satu dua tiga empat lima enam tujuh delapan sembilan sepuluh")).toBeNull();
+    expect(
+      wrapHook("satu dua tiga empat lima enam tujuh delapan sembilan sepuluh sebelas duabelas")
+    ).toBeNull();
   });
 
   it("слово длиннее строки отвергается: в кадре оно всё равно вылезет", () => {
@@ -298,7 +305,25 @@ describe("wrapHook", () => {
   });
 
   it("схлопывает лишние пробелы и переносы", () => {
-    expect(wrapHook("  Kamu   sibuk?\n Justru itu  ")).toEqual(["Kamu sibuk?", "Justru itu"]);
+    // При лимите 26 «Kamu sibuk? Justru itu» — это 22 знака, влезает целиком в одну строку.
+    expect(wrapHook("  Kamu   sibuk?\n Justru itu  ")).toEqual(["Kamu sibuk? Justru itu"]);
+  });
+
+  it("ровно 26 знаков — одна строка", () => {
+    const hook = "Jangan tunggu keajaiban ya";
+    expect(hook.length).toBe(26);
+    expect(wrapHook(hook)).toEqual(["Jangan tunggu keajaiban ya"]);
+  });
+
+  it("27 знаков — переносится на две строки", () => {
+    const hook = "Jangan tunggu keajaiban ini";
+    expect(hook.length).toBe(27);
+    expect(wrapHook(hook)).toEqual(["Jangan tunggu keajaiban", "ini"]);
+  });
+
+  it("лимиты строки и числа строк настраиваются", () => {
+    expect(wrapHook("  Kamu   sibuk?\n Justru itu  ", 12)).toEqual(["Kamu sibuk?", "Justru itu"]);
+    expect(wrapHook("Kamu sibuk? Justru itu", 12, 1)).toBeNull();
   });
 });
 ```
@@ -312,7 +337,7 @@ Expected: FAIL — модуля нет.
 
 ```ts
 // lib/farm/wrap.ts
-export const HOOK_LINE_CHARS = 20;
+export const HOOK_LINE_CHARS = 26;
 export const HOOK_MAX_LINES = 3;
 
 // drawtext сам не переносит: длинный хук уехал бы за кадр. Считаем перенос здесь,
@@ -403,6 +428,11 @@ describe("batch token", () => {
     const forged = `${Buffer.from("999.-.99999999999999").toString("base64url")}.${sig}`;
     expect(verifyBatchToken(forged, SECRET, NOW)).toBeNull();
   });
+
+  it("нечисловая тема не принимается", () => {
+    const token = signBatchToken(1, Number.NaN, NOW + 1000, SECRET);
+    expect(verifyBatchToken(token, SECRET, NOW)).toBeNull();
+  });
 });
 
 describe("tickKey", () => {
@@ -457,9 +487,12 @@ export function verifyBatchToken(
   const [chatRaw, threadRaw, expiresRaw] = payload.split(".");
   const chatId = Number(chatRaw);
   const expiresAt = Number(expiresRaw);
+  // Нечисловая тема дала бы NaN, и он уехал бы в message_thread_id Telegram.
+  const threadId = threadRaw === "" ? null : Number(threadRaw);
   if (!Number.isFinite(chatId) || !Number.isFinite(expiresAt)) return null;
+  if (threadId !== null && !Number.isFinite(threadId)) return null;
   if (nowMs > expiresAt) return null;
-  return { chatId, threadId: threadRaw === "" ? null : Number(threadRaw) };
+  return { chatId, threadId };
 }
 
 // Роуты тиков дёргают сами себя и внешний таймер, поэтому наружу они закрыты
@@ -835,6 +868,8 @@ git commit -m "feat(farm): назначение слотов публикаци�
 
 - [ ] **Step 1: Написать падающий тест**
 
+> Ниже — редакция Task 6; константы стиля, построчный drawtext и проверка шрифта заменены в Task 14 — сверяйся с ней и с `lib/farm/render.ts`.
+
 ```ts
 // tests/farm-render.test.ts
 import { describe, expect, it, vi } from "vitest";
@@ -855,7 +890,7 @@ describe("ffmpegArgs", () => {
     expect(args).toContain("scale=1080:1920:force_original_aspect_ratio=increase");
     expect(args).toContain("crop=1080:1920");
     expect(args).toContain("textfile=/tmp/hook.txt");
-    expect(args).not.toContain("text=");
+    expect(args).not.toMatch(/(?<!draw)text=/);
   });
 
   it("держит параметры стиля и потолок длительности", () => {
@@ -900,6 +935,8 @@ Run: `npx vitest run tests/farm-render.test.ts`
 Expected: FAIL — модуля нет.
 
 - [ ] **Step 3: Реализовать**
+
+> Ниже — редакция Task 6; константы стиля, построчный drawtext и проверка шрифта заменены в Task 14 — сверяйся с ней и с `lib/farm/render.ts`.
 
 ```ts
 // lib/farm/render.ts
@@ -1559,6 +1596,7 @@ git commit -m "feat(farm): обмен на долгоживущий токен �
 // tests/farm-start.test.ts
 import { describe, expect, it, vi } from "vitest";
 import { startBatch, validateBatch } from "../lib/farm/start";
+import { Item } from "../lib/farm/types";
 
 const files = [
   { url: "https://blob.public.blob.vercel-storage.com/farm/sources/1.mp4", bytes: 10 },
@@ -1579,7 +1617,7 @@ describe("validateBatch", () => {
   it("не переносимый хук — ошибка с номером", () => {
     const bad = [{ hook: "Assalamualaikumwarahmatullahi", caption: "Описание" }, pairs[1]];
     expect(validateBatch({ pairs: bad, files })).toEqual([
-      "блок 1: хук не влезает в 3 строки по 20 знаков",
+      "блок 1: хук не влезает в 3 строки по 26 знаков",
     ]);
   });
 
@@ -1591,7 +1629,7 @@ describe("validateBatch", () => {
 
 describe("startBatch", () => {
   it("создаёт задачи по числу пар и запускает рендер", async () => {
-    const saveItem = vi.fn(async () => {});
+    const saveItem = vi.fn<(item: Item) => Promise<void>>(async () => {});
     const saveBatch = vi.fn(async () => {});
     const triggerRender = vi.fn(async () => {});
 
@@ -2359,7 +2397,7 @@ export function classifyForCleanup(items: Item[], nowMs: number): {
 }
 ```
 
-`runDaily` дополнительно: проверяет токен публикации через `checkToken` и при невалидности или сроке меньше 7 дней пишет в чат (молча умерший токен останавливает заливку навсегда); для `unstick` со статусом `posting` сообщение прямо просит проверить ленту; удаляет подложки под `farm/sources/`, у которых нет живой задачи; добирает просроченные `queued` через `pickDue`/`postOne`.
+`runDaily` дополнительно: проверяет токен публикации через `checkToken` и при невалидности или сроке меньше 7 дней пишет в чат (молча умерший токен останавливает заливку навсегда); для `unstick` со статусом `posting` сообщение прямо просит проверить ленту; удаляет подложки под `farm/sources/`, у которых нет живой задачи; добирает просроченные `queued` через `pickDue`/`postOne`, но не более одного ролика за вызов и только если предшествующая уборка не съела бюджет вызова.
 
 - [ ] **Step 4: Крон, шрифт и документация**
 
@@ -2373,7 +2411,7 @@ export function classifyForCleanup(items: Item[], nowMs: number): {
 }
 ```
 
-Положить `assets/hook.ttf` (жирный sans с латиницей: Montserrat ExtraBold или Inter Bold). В `SETUP.md` добавить раздел «Ферма рилсов»: получение токена публикации через Graph API Explorer с обменом на бессрочный Page-токен (Task 8b), новые переменные `FARM_TOKEN_SECRET`, `FARM_IG_TOKEN`, `FARM_IG_ID`, `FARM_FB_APP_ID`, `FARM_FB_APP_SECRET`, `FARM_SLOT_START`, `FARM_SLOT_MINUTES`, `FARM_SLOTS_PER_DAY`, `FARM_TZ`, настройка внешнего таймера на `/api/farm/post?key=...` раз в 15 минут и напоминание, что оба слота крона Hobby после этого заняты.
+Положить `assets/hook.ttf` (жирный sans с латиницей: Montserrat ExtraBold или Inter Bold). В `SETUP.md` добавить раздел «Ферма рилсов»: получение токена публикации через Graph API Explorer с обменом на бессрочный Page-токен (Task 8b), новые переменные `FARM_TOKEN_SECRET`, `FARM_IG_TOKEN`, `FARM_IG_ID`, `FARM_FB_APP_ID`, `FARM_FB_APP_SECRET`, `FARM_SLOT_START`, `FARM_SLOT_MINUTES`, `FARM_SLOTS_PER_DAY`, `FARM_TZ`, `FARM_BASE_URL` (необязательная, по умолчанию `https://$VERCEL_PROJECT_PRODUCTION_URL` — нужна для само-вызова цепочки рендера), настройка внешнего таймера на `/api/farm/post?key=...` раз в 15 минут и напоминание, что оба слота крона Hobby после этого заняты.
 
 - [ ] **Step 5: Прогнать тесты и закоммитить**
 
@@ -2384,6 +2422,30 @@ Expected: PASS.
 git add lib/farm/daily.ts app/api/farm/daily/route.ts vercel.json SETUP.md assets/hook.ttf tests/farm-daily.test.ts
 git commit -m "feat(farm): суточная уборка, крон и документация настройки"
 ```
+
+---
+
+### Task 14: Калибровка рендера и пресеты позиции
+
+Родилась из живой проверки: рендер по текущим константам даёт не тот вид, что в эталоне заказчика.
+
+**Files:**
+- Modify: `lib/farm/render.ts`, `lib/farm/wrap.ts`, `lib/farm/types.ts`, `lib/farm/tick.ts`, `lib/farm/start.ts`, `lib/farm/commands.ts`, `app/farm/[token]/batch-form.tsx`, `app/api/farm/start/route.ts`, `app/api/telegram/route.ts`
+- Test: `tests/farm-render.test.ts`, `tests/farm-wrap.test.ts`, `tests/farm-commands.test.ts`
+
+**Что требуется:**
+
+1. **Построчный рендер.** `drawtext` центрирует блок целиком, поэтому вторая строка хука начинается там же, где первая, а в эталоне каждая строка центрирована по кадру. `text_align` появился в ffmpeg 7.0, в сборке `ffmpeg-static` — 6.0, её нет. Значит: один `drawtext` на строку, у каждого свой `textfile`, свой `x=(w-text_w)/2` и `y = baseY + i * (fontsize + line_spacing)`. Файлов текста N вместо одного; экранирование апострофов через `textfile=` сохраняется.
+
+2. **Константы стиля** — из Global Constraints: Montserrat Bold, 54, белый, `borderw=3:bordercolor=black`, `shadowcolor=black@0.5:shadowx=2:shadowy=3`, `line_spacing=10`.
+
+3. **Ширина строки** — `HOOK_LINE_CHARS` с 20 на **26** (в эталоне строки по 25-26 знаков; 20 резало бы хуки вдвое агрессивнее нужного). `HOOK_MAX_LINES` остаётся 3.
+
+4. **Пресеты позиции.** Тип `HookPosition = "top" | "center" | "bottom"` в `types.ts`, множители 0.18 / 0.42 / 0.62. Поле `position` у `Item` и `Batch`, дефолт `"top"`. Выбор — радиокнопками на странице пачки, уходит в `/api/farm/start`, попадает в задачи, применяется рендером. Команда `/style верх|центр|низ` в боте задаёт дефолт для будущих пачек (хранить в Blob `farm/state/style.json`), `/style` без аргумента показывает текущий.
+
+5. **Проверка шрифта перед запуском.** Если файл шрифта не читается, `drawtext` сообщает `Either text, a valid file, a timecode or text source must be provided` — то есть жалуется на ТЕКСТ, хотя виноват ШРИФТ. Диагностика обманчива. `renderHook` обязан заранее проверить доступность файла и падать с внятным сообщением, называющим путь.
+
+**Тесты:** аргументы ffmpeg содержат N блоков `drawtext` для N строк с разными `y`; каждый пресет даёт свой множитель; хук в 26 знаков проходит, в 27 — переносится; нечитаемый шрифт даёт ошибку с путём, а не про текст; `/style` разбирается и сохраняется.
 
 ---
 
