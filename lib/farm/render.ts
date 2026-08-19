@@ -8,6 +8,8 @@ export interface RenderSpec {
   hookLines: string[];
   hasAudio: boolean;
   position?: HookPosition;
+  /** Дорожка на весь ролик; задана — заменяет звук подложки, зациклившись. */
+  musicPath?: string | null;
 }
 
 export type Runner = (bin: string, args: string[]) => Promise<{ code: number; stderr: string }>;
@@ -32,6 +34,32 @@ const STYLE = `fontsize=${FONT_SIZE}:fontcolor=white:borderw=3:bordercolor=black
 
 const POSITION_Y: Record<HookPosition, number> = { top: 0.18, center: 0.42, bottom: 0.62 };
 
+// Все ролики одной длины: формат из эталона заказчика, короткий ролик успевает
+// прокрутиться несколько раз, пока человек читает описание.
+export const REEL_SECONDS = 7;
+// Музыку приглушаем: дорожка из ролика-эталона на полной громкости перекрывает всё.
+const MUSIC_VOLUME = 0.5;
+const FADE_SECONDS = 0.6;
+
+const ENCODE = [
+  "-c:v",
+  "libx264",
+  "-preset",
+  "veryfast",
+  "-crf",
+  "23",
+  "-pix_fmt",
+  "yuv420p",
+  "-r",
+  "30",
+  "-c:a",
+  "aac",
+  "-b:a",
+  "128k",
+  "-movflags",
+  "+faststart",
+];
+
 export function ffmpegArgs(spec: RenderSpec): string[] {
   const multiplier = POSITION_Y[spec.position ?? DEFAULT_POSITION];
   // drawtext центрирует блок текста целиком, поэтому вторая строка хука начинала
@@ -49,32 +77,52 @@ export function ffmpegArgs(spec: RenderSpec): string[] {
 
   const filter = ["scale=1080:1920:force_original_aspect_ratio=increase", "crop=1080:1920", ...drawtexts].join(",");
 
+  // Видео зацикливаем на входе: подложка короче семи секунд иначе оборвала бы
+  // ролик раньше времени, а -t ниже всё равно режет по нужной длине.
+  const videoIn = ["-stream_loop", "-1", "-i", spec.sourcePath];
+  const fadeStart = Math.max(0, REEL_SECONDS - FADE_SECONDS);
+
+  if (spec.musicPath) {
+    // Музыку зацикливаем фильтром aloop, а НЕ вторым -stream_loop: на аудиовходе
+    // -stream_loop с конечным -t уводит ffmpeg в бесконечный цикл (проверено:
+    // процесс не завершается вовсе). aloop отрабатывает и на треке короче ролика.
+    const audioChain = [
+      "aloop=loop=-1:size=2147483647",
+      `atrim=duration=${REEL_SECONDS}`,
+      `volume=${MUSIC_VOLUME}`,
+      `afade=t=out:st=${fadeStart}:d=${FADE_SECONDS}`,
+    ].join(",");
+
+    return [
+      "-y",
+      ...videoIn,
+      "-i",
+      spec.musicPath,
+      "-filter_complex",
+      `[0:v]${filter}[v];[1:a]${audioChain}[a]`,
+      "-map",
+      "[v]",
+      "-map",
+      "[a]",
+      ...ENCODE,
+      "-t",
+      String(REEL_SECONDS),
+      spec.outPath,
+    ];
+  }
+
+  // Без своей дорожки: звук подложки, а если его нет — тишина, иначе Instagram
+  // получает ролик без аудиопотока.
   return [
     "-y",
-    "-i",
-    spec.sourcePath,
+    ...videoIn,
     ...(spec.hasAudio ? [] : ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"]),
     "-vf",
     filter,
-    ...(spec.hasAudio ? [] : ["-shortest"]),
-    "-c:v",
-    "libx264",
-    "-preset",
-    "veryfast",
-    "-crf",
-    "23",
-    "-pix_fmt",
-    "yuv420p",
-    "-r",
-    "30",
-    "-c:a",
-    "aac",
-    "-b:a",
-    "128k",
-    "-movflags",
-    "+faststart",
+    ...(spec.hasAudio ? [] : ["-map", "0:v:0", "-map", "1:a:0"]),
+    ...ENCODE,
     "-t",
-    "90",
+    String(REEL_SECONDS),
     spec.outPath,
   ];
 }

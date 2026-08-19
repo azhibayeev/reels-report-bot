@@ -12,6 +12,8 @@ export type ItemStatus =
 export interface Pair {
   hook: string;
   caption: string;
+  /** Дорожка группы: одна на все её ролики, пусто — остаётся звук подложки. */
+  musicUrl?: string | null;
 }
 
 export const HOOK_POSITIONS = ["top", "center", "bottom"] as const;
@@ -35,6 +37,8 @@ export interface Item {
   /** Необязательное: задачи в Blob сериализованы без него, обязательное поле сломало бы старые записи и литералы Item в тестах. */
   position?: HookPosition;
   sourceUrl: string;
+  /** Необязательно: задачи, созданные до появления музыки, поля не имеют. */
+  musicUrl?: string | null;
   videoUrl: string | null;
   messageId: number | null;
   /** Сообщение force_reply: по ответу на него находим ролик при правке описания. */

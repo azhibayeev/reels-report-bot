@@ -63,7 +63,8 @@ describe("ffmpegArgs", () => {
     expect(args).toContain("shadowcolor=black@0.5");
     expect(args).toContain("shadowx=2");
     expect(args).toContain("shadowy=3");
-    expect(args).toContain("-t 90");
+    expect(args).toContain("-t 7"); // все ролики одной длины
+    expect(args).toContain("-stream_loop -1"); // короткая подложка зацикливается
     expect(args).toContain("-movflags +faststart");
     expect(args).toContain("expansion=none");
   });
@@ -80,7 +81,7 @@ describe("ffmpegArgs", () => {
   it("без звука в исходнике подмешивает тишину: IG надёжнее принимает ролик со звуковой дорожкой", () => {
     const args = ffmpegArgs({ ...spec, hasAudio: false }).join(" ");
     expect(args).toContain("anullsrc");
-    expect(args).toContain("-shortest");
+    expect(args).toContain("-map 0:v:0 -map 1:a:0"); // тишина берётся вторым входом
   });
 });
 
@@ -128,5 +129,30 @@ describe("renderHook", () => {
     await expect(
       renderHook(spec, { runner, writeText: async () => {}, ffmpegPath: "/bin/ffmpeg", fontReadable })
     ).rejects.toThrow(/boom/);
+  });
+});
+
+describe("музыка на ролик", () => {
+  const withMusic = { ...spec, musicPath: "/tmp/track.m4a" };
+
+  it("зацикливает трек фильтром, а не вторым -stream_loop", () => {
+    const args = ffmpegArgs(withMusic).join(" ");
+    // -stream_loop на аудиовходе вместе с конечным -t уводит ffmpeg в вечный цикл:
+    // процесс не завершается вовсе. Проверено на живом бинарнике.
+    expect(args).toContain("aloop=loop=-1");
+    expect(args.match(/-stream_loop/g) ?? []).toHaveLength(1);
+  });
+
+  it("приглушает и гасит хвост, обрезая по длине ролика", () => {
+    const args = ffmpegArgs(withMusic).join(" ");
+    expect(args).toContain("volume=0.5");
+    expect(args).toContain("atrim=duration=7");
+    expect(args).toContain("afade=t=out:st=6.4:d=0.6");
+  });
+
+  it("своя дорожка вытесняет звук подложки", () => {
+    const args = ffmpegArgs({ ...withMusic, hasAudio: true }).join(" ");
+    expect(args).toContain('-map [v] -map [a]');
+    expect(args).not.toContain("anullsrc");
   });
 });

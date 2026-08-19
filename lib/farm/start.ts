@@ -42,6 +42,8 @@ export const MAX_HOOKS = 60;
 export interface HookGroup {
   hooks: string[];
   caption: string;
+  /** Одна дорожка на всю группу; пусто — у роликов остаётся звук подложки. */
+  musicUrl?: string | null;
 }
 
 export interface Assignment {
@@ -62,7 +64,7 @@ export function assignSources(groups: HookGroup[], files: UploadedFile[]): Assig
   let taken = 0;
   for (const group of groups) {
     for (const hook of group.hooks) {
-      pairs.push({ hook, caption: group.caption });
+      pairs.push({ hook, caption: group.caption, musicUrl: group.musicUrl ?? null });
       sources.push(files[taken % files.length]);
       taken += 1;
     }
@@ -290,6 +292,7 @@ export async function startBatch(
         hook: input.pairs[i].hook,
         caption: input.pairs[i].caption,
         sourceUrl: input.files[i].url,
+        musicUrl: input.pairs[i].musicUrl ?? null,
         videoUrl: null,
         messageId: null,
         editPromptId: null,

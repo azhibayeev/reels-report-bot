@@ -31,7 +31,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         }
 
         return {
-          allowedContentTypes: ["video/mp4", "video/quicktime", "video/x-matroska", "video/webm"],
+          allowedContentTypes: [
+            "video/mp4",
+            "video/quicktime",
+            "video/x-matroska",
+            "video/webm",
+            // Музыка группы: та же ручка, тот же токен — отдельный роут завёл бы
+            // вторую точку с теми же проверками.
+            "audio/mpeg",
+            "audio/mp4",
+            "audio/aac",
+            "audio/x-m4a",
+            "audio/wav",
+          ],
           addRandomSuffix: true,
           maximumSizeInBytes: MAX_FILE_BYTES,
         };

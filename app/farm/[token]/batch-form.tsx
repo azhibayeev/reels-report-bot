@@ -11,6 +11,7 @@ type Stage = "idle" | "uploading" | "starting" | "done" | "error";
 interface Group {
   hooksText: string;
   caption: string;
+  music: File | null;
 }
 
 const POSITION_LABELS: Record<HookPosition, string> = {
@@ -19,7 +20,7 @@ const POSITION_LABELS: Record<HookPosition, string> = {
   bottom: "Низ",
 };
 
-const EMPTY_GROUP: Group = { hooksText: "", caption: "" };
+const EMPTY_GROUP: Group = { hooksText: "", caption: "", music: null };
 
 export default function BatchForm({
   token,
@@ -103,11 +104,29 @@ export default function BatchForm({
       // а по одному — слишком долго для пачки такого размера.
       await Promise.all([worker(), worker(), worker()]);
 
+      // Дорожки льём после видео и по одной: их мало, а параллелить ради двух
+      // файлов нечего.
+      const groupsPayload = [];
+      for (const [i, group] of groups.entries()) {
+        let musicUrl: string | null = null;
+        if (group.music) {
+          const safe = group.music.name.replace(/[^a-zA-Z0-9._-]+/g, "-");
+          const blob = await upload(`farm/sources/music-${Date.now()}-${i}-${safe}`, group.music, {
+            access: "public",
+            handleUploadUrl: "/api/farm/upload",
+            clientPayload: token,
+            multipart: true,
+          });
+          musicUrl = blob.url;
+        }
+        groupsPayload.push({ hooks: parsed[i].hooks, caption: group.caption, musicUrl });
+      }
+
       setStage("starting");
       const res = await fetch("/api/farm/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, files: results, groups: parsed, position }),
+        body: JSON.stringify({ token, files: results, groups: groupsPayload, position }),
       });
       const data = (await res.json()) as { ok?: boolean; total?: number; error?: string };
       if (!res.ok || !data.ok) {
@@ -198,6 +217,20 @@ export default function BatchForm({
               placeholder="Описание под все ролики этой группы: текст, призыв, кодовое слово."
               disabled={busy || stage === "done"}
             />
+
+            <p style={{ margin: ".7rem 0 0", fontSize: ".9rem" }}>
+              Музыка группы:{" "}
+              <input
+                type="file"
+                accept="audio/*"
+                onChange={(event) => patchGroup(i, { music: event.target.files?.[0] ?? null })}
+                disabled={busy || stage === "done"}
+              />
+              <br />
+              <span style={{ color: "#566b60" }}>
+                Не выбрана — останется звук подложки. Трек короче ролика зациклится.
+              </span>
+            </p>
           </div>
         ))}
 

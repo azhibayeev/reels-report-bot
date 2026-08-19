@@ -92,6 +92,21 @@ async function renderItem(item: Item): Promise<string> {
     const font = fontPath();
 
     const hasAudio = await probeHasAudio(sourcePath);
+
+    // Дорожку тянем тем же способом, что подложку. Не скачалась — не повод
+    // терять ролик: соберём его со звуком подложки и скажем об этом в логах.
+    let musicPath: string | null = null;
+    if (item.musicUrl) {
+      try {
+        const music = await fetch(item.musicUrl, { cache: "no-store" });
+        if (!music.ok) throw new Error(`статус ${music.status}`);
+        musicPath = join(dir, "music.m4a");
+        await writeFile(musicPath, Buffer.from(await music.arrayBuffer()));
+      } catch (error) {
+        console.error("farm music download failed", item.itemId, error);
+        musicPath = null;
+      }
+    }
     const outPath = join(dir, "out.mp4");
     const textPaths = lines.map((_, i) => join(dir, `hook-${i}.txt`));
 
@@ -104,6 +119,7 @@ async function renderItem(item: Item): Promise<string> {
         hookLines: lines,
         hasAudio,
         position: item.position ?? DEFAULT_POSITION,
+        musicPath,
       },
       {
         runner,

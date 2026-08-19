@@ -30,7 +30,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const body = (await req.json()) as {
     token?: string;
     files?: { url: string; bytes: number }[];
-    groups?: { hooks?: string[]; caption?: string }[];
+    groups?: { hooks?: string[]; caption?: string; musicUrl?: string | null }[];
     position?: string;
   };
   if (!body.token || !Array.isArray(body.files)) {
@@ -93,6 +93,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const groups: HookGroup[] = (body.groups ?? []).map((g) => ({
       hooks: (g.hooks ?? []).map((h) => h.trim()).filter(Boolean),
       caption: (g.caption ?? "").trim(),
+      // Дорожку принимаем только из нашего хранилища: ссылка уедет в ffmpeg,
+      // и чужой url означал бы скачивание произвольного файла нашей функцией.
+      musicUrl:
+        g.musicUrl && /^https:\/\/[a-z0-9]+\.public\.blob\.vercel-storage\.com\//.test(g.musicUrl)
+          ? g.musicUrl
+          : null,
     }));
     const errors = validateGroups(groups, checked);
     if (errors.length) throw new Error(errors.join("; "));
