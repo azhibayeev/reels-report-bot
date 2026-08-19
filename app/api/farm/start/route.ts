@@ -1,12 +1,19 @@
 import crypto from "node:crypto";
 import { head } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
-import { MAX_FILES, startBatch, UploadedFile } from "../../../../lib/farm/start";
+import {
+  assignSources,
+  HookGroup,
+  interleave,
+  MAX_FILES,
+  startBatch,
+  UploadedFile,
+  validateGroups,
+} from "../../../../lib/farm/start";
 import { deleteBlobQuiet, saveBatch, saveItem, SOURCES_PREFIX } from "../../../../lib/farm/store";
 import { triggerRender } from "../../../../lib/farm/tick";
 import { verifyBatchToken } from "../../../../lib/farm/tokens";
 import { DEFAULT_POSITION, HookPosition, isHookPosition } from "../../../../lib/farm/types";
-import { parseBlocks } from "../../../../lib/farm/parse";
 import { sendMessage } from "../../../../lib/telegram";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +30,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const body = (await req.json()) as {
     token?: string;
     files?: { url: string; bytes: number }[];
-    text?: string;
+    groups?: { hooks?: string[]; caption?: string }[];
     position?: string;
   };
   if (!body.token || !Array.isArray(body.files)) {
@@ -83,11 +90,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   let chainFailed = false;
   let total: number;
   try {
-    const { pairs, errors } = parseBlocks(body.text ?? "");
+    const groups: HookGroup[] = (body.groups ?? []).map((g) => ({
+      hooks: (g.hooks ?? []).map((h) => h.trim()).filter(Boolean),
+      caption: (g.caption ?? "").trim(),
+    }));
+    const errors = validateGroups(groups, checked);
     if (errors.length) throw new Error(errors.join("; "));
 
+    // Раздаём подложки по кругу, затем перемешиваем порядок публикации: иначе
+    // все ролики одной группы ушли бы в ленту подряд.
+    const { pairs, sources } = interleave(assignSources(groups, checked));
+
     ({ total } = await startBatch(
-      { chatId: claim.chatId, threadId: claim.threadId, pairs, files: checked, position },
+      { chatId: claim.chatId, threadId: claim.threadId, pairs, files: sources, position },
       {
         saveItem,
         saveBatch,

@@ -260,7 +260,7 @@ describe("1. вход: POST /api/farm/start создаёт задачи", () => 
           { url: a, bytes: 1 },
           { url: b, bytes: 1 },
         ],
-        text: "Хук один\nОписание раз\n---\nХук два\nОписание два",
+        groups: [{ hooks: ["Хук один", "Хук два"], caption: "Общее описание" }],
         position: "center",
       })
     );
@@ -268,8 +268,10 @@ describe("1. вход: POST /api/farm/start создаёт задачи", () => 
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true, total: 2 });
     const saved = items();
-    expect(saved.map((i) => i.hook)).toEqual(["Хук один", "Хук два"]);
-    expect(saved.map((i) => i.sourceUrl)).toEqual([a, b]);
+    // Порядок публикации перемешивается, поэтому сверяем состав, а не позиции.
+    expect(saved.map((i) => i.hook).sort()).toEqual(["Хук два", "Хук один"]);
+    expect(saved.every((i) => i.caption === "Общее описание")).toBe(true);
+    expect(saved.map((i) => i.sourceUrl).sort()).toEqual([a, b].sort());
     expect(saved.every((i) => i.position === "center")).toBe(true);
     expect(saved.every((i) => i.status === "pending")).toBe(true);
     expect(sent.triggers).toHaveLength(1);

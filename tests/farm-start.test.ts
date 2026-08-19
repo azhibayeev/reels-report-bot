@@ -21,7 +21,7 @@ describe("validateBatch", () => {
   it("не переносимый хук — ошибка с номером", () => {
     const bad = [{ hook: "Assalamualaikumwarahmatullahi", caption: "Описание" }, pairs[1]];
     expect(validateBatch({ pairs: bad, files })).toEqual([
-      "блок 1: хук не влезает в 3 строки по 26 знаков",
+      "блок 1: хук не влезает в 4 строки по 26 знаков",
     ]);
   });
 

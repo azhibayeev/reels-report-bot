@@ -184,9 +184,18 @@ export async function runRenderTick(batchId: string, deps: RenderTickDeps): Prom
           }
         }
 
-        // Исходник больше не нужен: публикуется готовый ролик, а квота Blob на Hobby
-        // при превышении отключает хранилище на 30 дней.
-        await deps.deleteBlobQuiet(item.sourceUrl);
+        // Исходник больше не нужен — но только если он больше никому не нужен:
+        // одна подложка раздаётся нескольким хукам по кругу, и удалить её сразу
+        // значило бы оставить остальные ролики пачки с мёртвой ссылкой. Квота
+        // Blob на Hobby при превышении отключает хранилище на 30 дней, поэтому
+        // держать лишнее тоже нельзя: удаляем, когда ждущих не осталось.
+        const stillNeeded = (await deps.listItems()).some(
+          (other) =>
+            other.itemId !== item.itemId &&
+            other.sourceUrl === item.sourceUrl &&
+            (other.status === "pending" || other.status === "rendering")
+        );
+        if (!stillNeeded) await deps.deleteBlobQuiet(item.sourceUrl);
       } catch (error) {
         const message = (error as Error).message;
         if (renderedUrl) {

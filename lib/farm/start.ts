@@ -36,6 +36,100 @@ function firstCharOutsideHookFont(hook: string): string | null {
   return null;
 }
 
+export const MAX_HOOKS = 60;
+
+/** Группа: список хуков и одно описание на всю группу — оно уйдёт под каждый её ролик. */
+export interface HookGroup {
+  hooks: string[];
+  caption: string;
+}
+
+export interface Assignment {
+  pairs: Pair[];
+  sources: UploadedFile[];
+}
+
+/**
+ * Раздача подложек по кругу. При 10 файлах на 30 хуков каждая подложка уходит
+ * трижды, но пара «хук + подложка» не повторяется. Чистая случайность иногда
+ * ставит одну подложку четыре раза подряд, и в ленте это бросается в глаза.
+ */
+export function assignSources(groups: HookGroup[], files: UploadedFile[]): Assignment {
+  const pairs: Pair[] = [];
+  const sources: UploadedFile[] = [];
+  if (files.length === 0) return { pairs, sources };
+
+  let taken = 0;
+  for (const group of groups) {
+    for (const hook of group.hooks) {
+      pairs.push({ hook, caption: group.caption });
+      sources.push(files[taken % files.length]);
+      taken += 1;
+    }
+  }
+  return { pairs, sources };
+}
+
+/**
+ * Перемешивание порядка публикации. Без него тридцать роликов одной темы уходили
+ * бы в ленту подряд два дня, а вторая группа ждала бы своей очереди до конца.
+ */
+export function interleave(assignment: Assignment, rand: () => number = Math.random): Assignment {
+  const order = assignment.pairs.map((_, i) => i);
+  for (let i = order.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rand() * (i + 1));
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  return {
+    pairs: order.map((i) => assignment.pairs[i]),
+    sources: order.map((i) => assignment.sources[i]),
+  };
+}
+
+/** Проверка групп до загрузки: нумерация ошибок идёт по группе и месту хука в ней. */
+export function validateGroups(groups: HookGroup[], files: UploadedFile[]): string[] {
+  const errors: string[] = [];
+
+  if (files.length === 0) errors.push("не выбрано ни одного видео");
+  const hookCount = groups.reduce((sum, g) => sum + g.hooks.length, 0);
+  if (hookCount === 0) errors.push("не введено ни одного хука");
+  if (hookCount > MAX_HOOKS) errors.push(`хуков ${hookCount}, лимит ${MAX_HOOKS} на пачку`);
+
+  groups.forEach((group, gi) => {
+    const label = groups.length > 1 ? `группа ${gi + 1}, ` : "";
+    if (!group.caption.trim()) {
+      errors.push(`${label}описание пустое — оно уходит в подпись под каждым роликом`);
+    } else if (group.caption.length > MAX_CAPTION_LENGTH) {
+      errors.push(`${label}описание ${group.caption.length} знаков, лимит ${MAX_CAPTION_LENGTH}`);
+    }
+    group.hooks.forEach((hook, hi) => {
+      if (!wrapHook(hook)) {
+        errors.push(`${label}хук ${hi + 1}: не влезает в ${HOOK_MAX_LINES} строки по ${HOOK_LINE_CHARS} знаков`);
+      }
+      const badChar = firstCharOutsideHookFont(hook);
+      if (badChar) {
+        errors.push(`${label}хук ${hi + 1}: знак «${badChar}» отсутствует в шрифте — в кадре был бы пустой квадрат`);
+      }
+    });
+  });
+
+  files.forEach((file, i) => {
+    if (file.bytes > MAX_FILE_BYTES) {
+      errors.push(`файл ${i + 1}: ${Math.round(file.bytes / 1024 / 1024)} МБ, лимит ${MAX_FILE_BYTES / 1024 / 1024} МБ`);
+    }
+  });
+  if (files.length > MAX_FILES) errors.push(`файлов ${files.length}, лимит ${MAX_FILES}`);
+
+  const total = files.reduce((sum, f) => sum + f.bytes, 0);
+  if (total > MAX_BATCH_BYTES) {
+    errors.push(`пачка ${Math.round(total / 1024 / 1024)} МБ, лимит 1024 МБ — разбейте на две`);
+  }
+
+  return errors;
+}
+
+const MAX_CAPTION_LENGTH = 2200;
+
 export function validateBatch(input: { pairs: Pair[]; files: UploadedFile[] }): string[] {
   const errors: string[] = [];
   const { pairs, files } = input;

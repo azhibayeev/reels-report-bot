@@ -174,7 +174,21 @@ async function handleFarmCommand(cmd: string, text: string, opts: SendOptions, r
   }
   if (cmd === "/reels") {
     const items = await listItems();
-    await sendMessage(formatQueue(items, Date.now()), opts);
+    // Сводка отвечает «сколько и когда ближайший», а расписание целиком в чат не
+    // влезает: тридцать строк там нечитаемы. Поэтому ссылка на окно плана.
+    const planToken = signBatchToken(
+      Number(opts.chat ?? process.env.TELEGRAM_CHAT_ID),
+      opts.thread ?? null,
+      Date.now() + BATCH_TOKEN_TTL_MS,
+      requireEnv("FARM_TOKEN_SECRET")
+    );
+    const base = process.env.FARM_BASE_URL
+      ? process.env.FARM_BASE_URL.replace(/\/+$/, "")
+      : `https://${req.headers.get("x-forwarded-host") ?? req.nextUrl.host}`;
+    await sendMessage(
+      `${formatQueue(items, Date.now())}\n\n🗓 Что и когда запланировано:\n${base}/farm/plan/${planToken}`,
+      opts
+    );
     for (const batchId of batchesToKick(items, Date.now())) {
       try {
         await triggerRender(batchId);

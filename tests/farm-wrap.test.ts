@@ -8,9 +8,11 @@ describe("wrapHook", () => {
     for (const line of lines!) expect(line.length).toBeLessThanOrEqual(HOOK_LINE_CHARS);
   });
 
-  it("не влезающий в 3 строки хук отвергается", () => {
+  it("не влезающий в 4 строки хук отвергается", () => {
     expect(
-      wrapHook("satu dua tiga empat lima enam tujuh delapan sembilan sepuluh sebelas duabelas")
+      wrapHook(
+        "satu dua tiga empat lima enam tujuh delapan sembilan sepuluh sebelas duabelas tigabelas empatbelas limabelas"
+      )
     ).toBeNull();
   });
 

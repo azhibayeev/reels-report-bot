@@ -122,7 +122,7 @@ describe("validateBatch: номер блока в сообщении об оши
     ] as unknown as Pair[];
 
     expect(validateBatch({ pairs, files })).toEqual([
-      "блок 3: хук не влезает в 3 строки по 26 знаков",
+      "блок 3: хук не влезает в 4 строки по 26 знаков",
     ]);
   });
 
@@ -133,7 +133,7 @@ describe("validateBatch: номер блока в сообщении об оши
     ];
 
     expect(validateBatch({ pairs, files })).toEqual([
-      "блок 2: хук не влезает в 3 строки по 26 знаков",
+      "блок 2: хук не влезает в 4 строки по 26 знаков",
     ]);
   });
 });

@@ -2,17 +2,24 @@
 
 import { upload } from "@vercel/blob/client";
 import { useRef, useState } from "react";
-import { parseBlocks } from "../../../lib/farm/parse";
-import { validateBatch } from "../../../lib/farm/start";
+import { parseHookList } from "../../../lib/farm/parse";
+import { validateGroups } from "../../../lib/farm/start";
 import type { HookPosition } from "../../../lib/farm/types";
 
 type Stage = "idle" | "uploading" | "starting" | "done" | "error";
+
+interface Group {
+  hooksText: string;
+  caption: string;
+}
 
 const POSITION_LABELS: Record<HookPosition, string> = {
   top: "Верх",
   center: "Центр",
   bottom: "Низ",
 };
+
+const EMPTY_GROUP: Group = { hooksText: "", caption: "" };
 
 export default function BatchForm({
   token,
@@ -22,7 +29,7 @@ export default function BatchForm({
   defaultPosition: HookPosition;
 }) {
   const [files, setFiles] = useState<File[]>([]);
-  const [text, setText] = useState("");
+  const [groups, setGroups] = useState<Group[]>([{ ...EMPTY_GROUP }]);
   const [position, setPosition] = useState<HookPosition>(defaultPosition);
   const [stage, setStage] = useState<Stage>("idle");
   const [done, setDone] = useState(0);
@@ -34,8 +41,6 @@ export default function BatchForm({
   // воркерах не должно дёргать ре-рендер — рендер дёргает только setDone.
   const resultsRef = useRef<({ url: string; bytes: number } | undefined)[]>([]);
 
-  // Порядок файлов задаёт пары «файл N ↔ блок N» — без сортировки по имени он
-  // молча зависел бы от порядка выбора в системном диалоге.
   function onPick(list: FileList | null) {
     const picked = list ? [...list] : [];
     picked.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
@@ -47,29 +52,27 @@ export default function BatchForm({
     resultsRef.current = []; // новый выбор файлов — новая пачка, старые ссылки не годятся
   }
 
+  function patchGroup(index: number, patch: Partial<Group>) {
+    setGroups((prev) => prev.map((g, i) => (i === index ? { ...g, ...patch } : g)));
+    setStage("idle");
+    setMessage("");
+  }
+
   // Пересчитывается на каждый рендер, без useEffect: цена — лишние вызовы
-  // parseBlocks/validateBatch на ввод текста, а не рассинхрон состояния.
-  const { pairs, errors: parseErrors } = parseBlocks(text);
+  // разбора на ввод текста, а не рассинхрон состояния.
+  const parsed = groups.map((g) => ({ hooks: parseHookList(g.hooksText), caption: g.caption }));
   const picked = files.map((f) => ({ url: f.name, bytes: f.size }));
-  const errors = [...parseErrors, ...validateBatch({ pairs, files: picked })];
-  const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
-  const totalMb = (totalBytes / (1024 * 1024)).toFixed(1);
-  const pairCount = Math.min(files.length, pairs.length);
-  // Инвариант parseBlocks: каждый блок текста даёт либо одну пару, либо ровно
-  // одну ошибку — значит число блоков это pairs.length + число ошибок разбора,
-  // а не pairs.length (иначе битый блок молча пропадает из счётчика).
-  const blockCount = pairs.length + parseErrors.length;
+  const errors = validateGroups(parsed, picked);
+  const hookCount = parsed.reduce((sum, g) => sum + g.hooks.length, 0);
+  const totalMb = (files.reduce((sum, f) => sum + f.size, 0) / (1024 * 1024)).toFixed(1);
 
   const busy = stage === "uploading" || stage === "starting";
-  const disabled = errors.length > 0 || files.length === 0 || busy || stage === "done";
+  const disabled = errors.length > 0 || busy || stage === "done";
 
   async function onSubmit() {
     try {
       setStage("uploading");
 
-      // Если ретраим после частичной заливки, массив уже содержит часть
-      // результатов с прошлой попытки — их пропускаем в воркере. Длина не
-      // совпадёт только на первом заходе или после onPick, где кэш обнулён.
       if (resultsRef.current.length !== files.length) {
         resultsRef.current = new Array(files.length);
       }
@@ -104,7 +107,7 @@ export default function BatchForm({
       const res = await fetch("/api/farm/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, files: results, text, position }),
+        body: JSON.stringify({ token, files: results, groups: parsed, position }),
       });
       const data = (await res.json()) as { ok?: boolean; total?: number; error?: string };
       if (!res.ok || !data.ok) {
@@ -114,7 +117,7 @@ export default function BatchForm({
         throw new Error(data.error ?? "не вышло");
       }
 
-      setTotal(data.total ?? results.length);
+      setTotal(data.total ?? hookCount);
       setStage("done");
       resultsRef.current = []; // успех — следующая пачка начнётся с чистого кэша
     } catch (error) {
@@ -123,9 +126,26 @@ export default function BatchForm({
     }
   }
 
+  const box = {
+    width: "100%",
+    boxSizing: "border-box" as const,
+    fontFamily: "monospace",
+    fontSize: "0.9rem",
+  };
+  const card = {
+    border: "1px solid #d5ded7",
+    borderRadius: 6,
+    padding: "1rem",
+    marginBottom: "1rem",
+  };
+
   return (
     <div>
-      <p>
+      <section style={{ marginBottom: "1.5rem" }}>
+        <h2 style={{ fontSize: "1.1rem", marginBottom: ".3rem" }}>1. Видео-подложки</h2>
+        <p style={{ margin: "0 0 .5rem", color: "#566b60" }}>
+          Общий пул: бот сам раздаёт их хукам по кругу. Подложек может быть меньше, чем хуков.
+        </p>
         <input
           type="file"
           multiple
@@ -133,53 +153,93 @@ export default function BatchForm({
           onChange={(event) => onPick(event.target.files)}
           disabled={busy || stage === "done"}
         />
-      </p>
+      </section>
 
-      <textarea
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        rows={12}
-        style={{ width: "100%", boxSizing: "border-box", fontFamily: "monospace" }}
-        placeholder={"Первый хук\nОписание первого ролика.\n---\nВторой хук\nОписание второго ролика."}
-        disabled={busy || stage === "done"}
-      />
+      <section>
+        <h2 style={{ fontSize: "1.1rem", marginBottom: ".3rem" }}>2. Хуки и описания</h2>
+        <p style={{ margin: "0 0 .75rem", color: "#566b60" }}>
+          Одна строка — один хук, нумерацию можно оставить, бот её срежет. Описание общее для всей
+          группы: оно уйдёт в подпись под каждым её роликом.
+        </p>
 
-      <p>
-        Позиция хука на видео:{" "}
-        {(Object.keys(POSITION_LABELS) as HookPosition[]).map((value) => (
-          <label key={value} style={{ marginRight: 12 }}>
-            <input
-              type="radio"
-              name="position"
-              value={value}
-              checked={position === value}
-              onChange={() => setPosition(value)}
+        {groups.map((group, i) => (
+          <div key={i} style={card}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: ".4rem" }}>
+              <strong>Группа {i + 1}</strong>
+              <span style={{ color: "#566b60" }}>
+                хуков: {parsed[i].hooks.length}
+                {groups.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => setGroups((prev) => prev.filter((_, k) => k !== i))}
+                    disabled={busy || stage === "done"}
+                    style={{ marginLeft: ".75rem" }}
+                  >
+                    убрать
+                  </button>
+                )}
+              </span>
+            </div>
+
+            <textarea
+              value={group.hooksText}
+              onChange={(event) => patchGroup(i, { hooksText: event.target.value })}
+              rows={8}
+              style={box}
+              placeholder={"1. Первый хук\n2. Второй хук\n3. Третий хук"}
               disabled={busy || stage === "done"}
-            />{" "}
-            {POSITION_LABELS[value]}
-          </label>
+            />
+
+            <textarea
+              value={group.caption}
+              onChange={(event) => patchGroup(i, { caption: event.target.value })}
+              rows={5}
+              style={{ ...box, marginTop: ".6rem" }}
+              placeholder="Описание под все ролики этой группы: текст, призыв, кодовое слово."
+              disabled={busy || stage === "done"}
+            />
+          </div>
         ))}
-      </p>
 
-      <p>
-        Блоков {blockCount} / файлов {files.length}, суммарный вес {totalMb} МБ.
-      </p>
+        <button
+          type="button"
+          onClick={() => setGroups((prev) => [...prev, { ...EMPTY_GROUP }])}
+          disabled={busy || stage === "done"}
+        >
+          + ещё группа
+        </button>
+      </section>
 
-      {pairCount > 0 && parseErrors.length === 0 && (
-        <ol>
-          {files.slice(0, pairCount).map((f, i) => (
-            <li key={f.name + i}>
-              {f.name} → {pairs[i].hook}
-            </li>
+      <section style={{ marginTop: "1.5rem" }}>
+        <h2 style={{ fontSize: "1.1rem", marginBottom: ".3rem" }}>3. Позиция хука</h2>
+        <p style={{ margin: 0 }}>
+          {(Object.keys(POSITION_LABELS) as HookPosition[]).map((value) => (
+            <label key={value} style={{ marginRight: "1.2rem" }}>
+              <input
+                type="radio"
+                name="position"
+                checked={position === value}
+                onChange={() => setPosition(value)}
+                disabled={busy || stage === "done"}
+              />{" "}
+              {POSITION_LABELS[value]}
+            </label>
           ))}
-        </ol>
-      )}
+        </p>
+      </section>
+
+      <p style={{ marginTop: "1.5rem" }}>
+        Получится <strong>{hookCount}</strong>{" "}
+        {hookCount === 1 ? "ролик" : hookCount < 5 ? "ролика" : "роликов"} из {files.length}{" "}
+        {files.length === 1 ? "подложки" : "подложек"}, суммарный вес {totalMb} МБ.
+      </p>
 
       {errors.length > 0 && (
-        <ul style={{ color: "crimson" }}>
-          {errors.map((error, i) => (
-            <li key={i}>{error}</li>
+        <ul style={{ color: "crimson", paddingLeft: "1.2rem" }}>
+          {errors.slice(0, 8).map((e) => (
+            <li key={e}>{e}</li>
           ))}
+          {errors.length > 8 && <li>…и ещё {errors.length - 8}</li>}
         </ul>
       )}
 
@@ -189,13 +249,13 @@ export default function BatchForm({
 
       {stage === "uploading" && (
         <p>
-          Загружено {done}/{files.length}
+          Загрузка: {done} / {files.length}
         </p>
       )}
-      {stage === "starting" && <p>Создаю задачи…</p>}
+      {stage === "starting" && <p>Собираю пачку…</p>}
       {stage === "done" && (
         <p>
-          Взял пачку: {total} роликов. Ролики придут в Telegram с кнопками — вкладку можно
+          Готово: {total} роликов в работе. Первые придут в чат через минуту-две — вкладку можно
           закрыть.
         </p>
       )}

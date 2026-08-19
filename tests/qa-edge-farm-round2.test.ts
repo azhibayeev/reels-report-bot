@@ -326,7 +326,7 @@ describe("K. «блок N» в ошибке хука указывает не н�
     ];
     // Именно так их складывает страница пачки: [...parseErrors, ...validateBatch].
     const shown = [...errors, ...validateBatch({ pairs, files })];
-    expect(shown[1]).toBe("блок 2: хук не влезает в 3 строки по 26 знаков");
+    expect(shown[1]).toBe("блок 2: хук не влезает в 4 строки по 26 знаков");
     // Хук блока 2 при этом безупречен — сообщение показывает на чужой блок.
     expect(pairs[1].hook).toBe("Assalamualaikumwarahmatullahi");
     // После починки: нумерация в validateBatch сквозная по исходным блокам.
