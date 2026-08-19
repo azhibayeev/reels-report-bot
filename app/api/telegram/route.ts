@@ -8,6 +8,19 @@ import {
   formatNowMessage,
   formatTargetMessage,
 } from "../../../lib/format";
+import { handleCallback, handleEditReply, liveApproveDeps } from "../../../lib/farm/approve";
+import {
+  batchesToKick,
+  formatQueue,
+  parseFarmCommand,
+  parseStylePosition,
+  positionName,
+} from "../../../lib/farm/commands";
+import { listItems } from "../../../lib/farm/store";
+import { loadDefaultPosition, saveDefaultPosition } from "../../../lib/farm/style";
+import { answerCallback } from "../../../lib/farm/telegram";
+import { requireEnv, triggerRender } from "../../../lib/farm/tick";
+import { BATCH_TOKEN_TTL_MS, signBatchToken } from "../../../lib/farm/tokens";
 import { fetchAllReels, fetchFollowersCount, fetchViews } from "../../../lib/instagram";
 import { getLeadLevels } from "../../../lib/leads";
 import { getAdInsights } from "../../../lib/meta";
@@ -25,6 +38,12 @@ interface TelegramUpdate {
     text?: string;
     message_thread_id?: number;
     chat?: { id?: number | string };
+    reply_to_message?: { message_id?: number };
+  };
+  callback_query?: {
+    id: string;
+    data?: string;
+    message?: { message_id?: number; chat?: { id?: number | string } };
   };
 }
 
@@ -36,7 +55,10 @@ const HELP =
   "/kliki — заходы по ссылкам за спринт (с 12:30)\n" +
   "/klikitotal — заходы по ссылкам за всё время\n" +
   "/target — таргет за сутки (реклама + уровни лидов)\n" +
-  "/targettotal — таргет за всё время (тотал по всем показателям)";
+  "/targettotal — таргет за всё время (тотал по всем показателям)\n" +
+  "/batch — загрузить пачку роликов фермы (ссылка на 30 минут)\n" +
+  "/reels — сводка по ферме: апрув, очередь, сбои\n" +
+  "/style верх|центр|низ — дефолтная позиция хука для будущих пачек (без аргумента — показать текущую)";
 
 // Живой замер: список рилсов + актуальные просмотры. Снапшот НЕ сохраняем,
 // чтобы не сдвигать базу ежедневного отчёта.
@@ -60,7 +82,7 @@ async function takeLiveSnapshot(): Promise<Snapshot> {
   };
 }
 
-async function handleCommand(cmd: string, opts: SendOptions): Promise<void> {
+async function handleReportCommand(cmd: string, opts: SendOptions): Promise<void> {
   if (cmd === "/start" || cmd === "/help") {
     await sendMessage(HELP, opts);
     return;
@@ -125,6 +147,53 @@ async function handleCommand(cmd: string, opts: SendOptions): Promise<void> {
   }
 }
 
+// Команды фермы. Возвращает true, если справилась сама — тогда handleReportCommand
+// вызывать не нужно. Принимает полный текст сообщения (не только первый токен),
+// потому что /style читает аргумент позиции из текста.
+async function handleFarmCommand(cmd: string, text: string, opts: SendOptions, req: NextRequest): Promise<boolean> {
+  if (cmd === "/batch") {
+    const chatId = Number(process.env.TELEGRAM_CHAT_ID);
+    const threadId = opts.thread ?? null;
+    const token = signBatchToken(chatId, threadId, Date.now() + BATCH_TOKEN_TTL_MS, requireEnv("FARM_TOKEN_SECRET"));
+    const explicitBase = process.env.FARM_BASE_URL;
+    const base = explicitBase
+      ? explicitBase.replace(/\/+$/, "")
+      : `https://${req.headers.get("x-forwarded-host") ?? req.nextUrl.host}`;
+    await sendMessage(`📥 Загрузка пачки роликов:\n${base}/farm/${token}\n\nСсылка живёт 30 минут.`, opts);
+    return true;
+  }
+  if (cmd === "/reels") {
+    const items = await listItems();
+    await sendMessage(formatQueue(items, Date.now()), opts);
+    for (const batchId of batchesToKick(items, Date.now())) {
+      try {
+        await triggerRender(batchId);
+      } catch (error) {
+        // Упавший пинок не должен ронять ответ на команду — цепочка рендера
+        // подхватится сама на следующем /reels или очередном тике.
+        console.error("farm /reels triggerRender failed", batchId, error);
+      }
+    }
+    return true;
+  }
+  if (cmd === "/style") {
+    const arg = parseStylePosition(text);
+    if (arg === "show") {
+      const current = await loadDefaultPosition();
+      await sendMessage(`Дефолтная позиция хука: <b>${positionName(current)}</b>`, opts);
+      return true;
+    }
+    if (arg === null) {
+      await sendMessage("Использование: /style верх|центр|низ (или top|center|bottom)", opts);
+      return true;
+    }
+    await saveDefaultPosition(arg);
+    await sendMessage(`✅ Дефолтная позиция хука: <b>${positionName(arg)}</b>\nПрименится к следующим пачкам.`, opts);
+    return true;
+  }
+  return false;
+}
+
 // Одноразовая настройка: регистрирует webhook и меню команд у Telegram.
 // Вызывается вручную с секретом крона: GET /api/telegram с Authorization: Bearer <CRON_SECRET>.
 export async function GET(req: NextRequest) {
@@ -142,7 +211,8 @@ export async function GET(req: NextRequest) {
     body: JSON.stringify({
       url: `https://${host}/api/telegram`,
       secret_token: secret,
-      allowed_updates: ["message"],
+      // Без callback_query нажатия инлайн-кнопок апрува до бота не доедут вообще.
+      allowed_updates: ["message", "callback_query"],
     }),
   });
   const commands = await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
@@ -157,6 +227,9 @@ export async function GET(req: NextRequest) {
         { command: "klikitotal", description: "Заходы по ссылкам за всё время" },
         { command: "target", description: "Таргет за сутки (реклама + уровни лидов)" },
         { command: "targettotal", description: "Таргет за всё время (тотал)" },
+        { command: "batch", description: "Загрузить пачку роликов фермы" },
+        { command: "reels", description: "Сводка по ферме: апрув, очередь, сбои" },
+        { command: "style", description: "Дефолтная позиция хука для будущих пачек" },
       ],
     }),
   });
@@ -176,11 +249,51 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
+  const cb = update.callback_query;
+  if (cb) {
+    const cbChatId = cb.message?.chat?.id;
+    if (String(cbChatId ?? "") !== process.env.TELEGRAM_CHAT_ID) {
+      return NextResponse.json({ ok: true });
+    }
+    try {
+      await handleCallback({ id: cb.id, data: cb.data ?? "", chatId: Number(cbChatId) }, liveApproveDeps());
+    } catch (e) {
+      console.error("callback_query failed:", e);
+      try {
+        // Без ответа на callback у человека в клиенте крутится вечный спиннер.
+        await answerCallback(cb.id, "Ошибка, попробуйте ещё раз");
+      } catch {
+        // Telegram тоже недоступен — остаётся лог Vercel.
+      }
+    }
+    return NextResponse.json({ ok: true });
+  }
+
   const msg = update.message;
+  const fromOurChat = String(msg?.chat?.id ?? "") === process.env.TELEGRAM_CHAT_ID;
+
+  if (fromOurChat && msg?.reply_to_message?.message_id) {
+    try {
+      const handled = await handleEditReply(
+        {
+          chatId: Number(msg.chat?.id),
+          threadId: msg.message_thread_id ?? null,
+          text: msg.text ?? "",
+          replyToMessageId: msg.reply_to_message.message_id,
+        },
+        liveApproveDeps()
+      );
+      if (handled) return NextResponse.json({ ok: true });
+    } catch (e) {
+      console.error("farm edit reply failed:", e);
+      // Не прерываем обработку — провалимся к разбору обычных команд ниже.
+    }
+  }
+
   const text = msg?.text?.trim() ?? "";
   // Реагируем только на команды из нашей группы; всё остальное молча подтверждаем,
   // чтобы Telegram не ретраил доставку.
-  if (!text.startsWith("/") || String(msg?.chat?.id ?? "") !== process.env.TELEGRAM_CHAT_ID) {
+  if (!text.startsWith("/") || !fromOurChat) {
     return NextResponse.json({ ok: true });
   }
 
@@ -189,7 +302,8 @@ export async function POST(req: NextRequest) {
   const opts: SendOptions = { thread: msg?.message_thread_id ?? null };
 
   try {
-    await handleCommand(cmd, opts);
+    const handledByFarm = parseFarmCommand(text) ? await handleFarmCommand(cmd, text, opts, req) : false;
+    if (!handledByFarm) await handleReportCommand(cmd, opts);
   } catch (e) {
     console.error(`${cmd} failed:`, e);
     const errMsg = e instanceof Error ? e.message : String(e);
