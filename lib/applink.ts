@@ -27,7 +27,24 @@ export function sanitizeSlug(raw: string | null | undefined): string | null {
   return SLUG_RE.test(slug) ? slug : null;
 }
 
-export function buildStoreUrl(platform: Platform, slug: string, providerToken: string | null): string | null {
+export interface AppLinkConfig {
+  /** Токен поставщика из App Store Connect: без него Apple не разложит установки по источникам. */
+  providerToken: string | null;
+  /** Вышло ли приложение в App Store. Пока нет — iPhone нельзя вести в стор. */
+  iosLive: boolean;
+  /** Куда ведём iPhone, пока приложения в App Store нет. */
+  iosFallbackUrl: string;
+}
+
+export function appLinkConfig(): AppLinkConfig {
+  return {
+    providerToken: process.env.APPSTORE_PROVIDER_TOKEN || null,
+    iosLive: process.env.APPSTORE_LIVE === "1",
+    iosFallbackUrl: process.env.IOS_FALLBACK_URL || "https://go.quranyy.com/gabung",
+  };
+}
+
+export function buildTargetUrl(platform: Platform, slug: string, cfg: AppLinkConfig): string | null {
   if (platform === "android") {
     // Play читает ОДИН параметр referrer, внутри которого лежит закодированная
     // utm-строка. Раскодированные параметры Play принял бы за свои и потерял метку.
@@ -38,10 +55,20 @@ export function buildStoreUrl(platform: Platform, slug: string, providerToken: s
     );
   }
   if (platform === "ios") {
+    // Пока приложения в App Store нет, вести туда людей нельзя: по нашему id
+    // лежит чужой билд. Отправляем их в комьюнити — там та же воронка, и метка
+    // источника сохраняется, так что iPhone-трафик не пропадает из учёта.
+    if (!cfg.iosLive) {
+      const url = new URL(cfg.iosFallbackUrl);
+      url.searchParams.set("utm_source", slug);
+      url.searchParams.set("utm_medium", "influencer");
+      url.searchParams.set("utm_campaign", CAMPAIGN);
+      return url.toString();
+    }
     // ct — метка кампании в App Analytics, pt — токен поставщика из App Store Connect.
     // Без pt Apple не разложит установки по источникам, но ссылка обязана работать.
     const params = new URLSearchParams({ ct: slug, mt: "8" });
-    if (providerToken) params.set("pt", providerToken);
+    if (cfg.providerToken) params.set("pt", cfg.providerToken);
     return `https://apps.apple.com/id/app/id${APPSTORE_ID}?${params.toString()}`;
   }
   return null;
