@@ -1,0 +1,334 @@
+// QA, раунд 2 — краевые случаи фермы рилсов.
+// Тесты ФИКСИРУЮТ текущее (дефектное) поведение, чтобы набор оставался зелёным.
+// Каждый блок помечен «ДЕФЕКТ:» и содержит инструкцию, какое утверждение должно
+// прийти на его место после починки.
+import { execFileSync } from "node:child_process";
+import crypto from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { handleEditReply, ApproveDeps } from "../lib/farm/approve";
+import { classifyForCleanup } from "../lib/farm/daily";
+import { parseBlocks } from "../lib/farm/parse";
+import { runRenderTick } from "../lib/farm/tick";
+import { ffmpegArgs } from "../lib/farm/render";
+import { startBatch, validateBatch } from "../lib/farm/start";
+import { Item, Batch } from "../lib/farm/types";
+
+const base: Item = {
+  itemId: "i1",
+  batchId: "b1",
+  chatId: -100,
+  threadId: null,
+  index: 1,
+  total: 3,
+  hook: "Хук",
+  caption: "Описание",
+  sourceUrl: "https://blob/s.mp4",
+  videoUrl: "https://blob/out.mp4",
+  messageId: 10,
+  editPromptId: null,
+  status: "review",
+  renderingAt: null,
+  postingAt: null,
+  scheduledAt: null,
+  igMediaId: null,
+  permalink: null,
+  error: null,
+  createdAt: "2026-08-19T00:00:00.000Z",
+};
+
+// ---------------------------------------------------------------------------
+// H. Хук с эмодзи/арабицей: шрифт таких знаков не знает, ffmpeg рисует пустые
+//    прямоугольники .notdef и выходит с кодом 0. validateBatch теперь такие
+//    хуки отбраковывает (первый тест ниже); до ffmpeg они не доходят — второй
+//    тест ниже фиксирует сам факт дефекта на уровне рендера как документацию.
+// ---------------------------------------------------------------------------
+describe("H. хук из знаков вне шрифта рендерится в пустые квадраты", () => {
+  const FONT = join(process.cwd(), "assets", "hook.ttf");
+  const FFMPEG = join(process.cwd(), "node_modules", "ffmpeg-static", "ffmpeg");
+
+  // Разбор cmap формата 4: какие коды знаков шрифт вообще умеет рисовать.
+  function fontCovers(codepoint: number): boolean {
+    const b = readFileSync(FONT);
+    const numTables = b.readUInt16BE(4);
+    let cmapOff = 0;
+    for (let i = 0; i < numTables; i += 1) {
+      const o = 12 + i * 16;
+      if (b.toString("ascii", o, o + 4) === "cmap") cmapOff = b.readUInt32BE(o + 8);
+    }
+    const subtables = b.readUInt16BE(cmapOff + 2);
+    let fmt4 = 0;
+    for (let i = 0; i < subtables; i += 1) {
+      const r = cmapOff + 4 + i * 8;
+      const off = b.readUInt32BE(r + 4);
+      if (b.readUInt16BE(cmapOff + off) === 4 && fmt4 === 0) fmt4 = cmapOff + off;
+    }
+    if (codepoint > 0xffff) return false; // cmap формата 4 адресует только BMP
+    const segX2 = b.readUInt16BE(fmt4 + 6);
+    const endOff = fmt4 + 14;
+    const startOff = endOff + segX2 + 2;
+    for (let i = 0; i < segX2 / 2; i += 1) {
+      const end = b.readUInt16BE(endOff + i * 2);
+      const start = b.readUInt16BE(startOff + i * 2);
+      if (codepoint <= end) return codepoint >= start;
+    }
+    return false;
+  }
+
+  it("хук со знаком вне cmap шрифта (эмодзи, арабица) даёт ошибку валидации", () => {
+    expect(fontCovers(0x41)).toBe(true); // A
+    expect(fontCovers(0x430)).toBe(true); // а
+    expect(fontCovers(0x1f525)).toBe(false); // 🔥
+    expect(fontCovers(0x2600)).toBe(false); // ☀
+    expect(fontCovers(0x627)).toBe(false); // ا
+
+    const files = [{ url: "https://x/1.mp4", bytes: 10 }];
+    const emojiErrors = validateBatch({ pairs: [{ hook: "Gratis 🔥", caption: "О" }], files });
+    expect(emojiErrors).toHaveLength(1);
+    expect(emojiErrors[0]).toContain("🔥");
+
+    const arabicErrors = validateBatch({ pairs: [{ hook: "بسم الله", caption: "О" }], files });
+    expect(arabicErrors).toHaveLength(1);
+    // Первый непокрытый знак — «ب», с него начинается сама строка «بسم الله».
+    expect(arabicErrors[0]).toContain("ب");
+  });
+
+  it("ДЕФЕКТ: два разных хука дают побайтово одинаковый кадр — текста в ролике нет", () => {
+    const dir = mkdtempSync(join(tmpdir(), "qa-farm-font-"));
+    try {
+      const src = join(dir, "src.mp4");
+      execFileSync(
+        FFMPEG,
+        ["-y", "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=1080x1920:d=1:r=30",
+         "-frames:v", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", src],
+        { stdio: ["ignore", "ignore", "pipe"] }
+      );
+
+      // Кадр ролика, собранного ровно теми аргументами, что уходят в прод.
+      const frameHash = (name: string, hook: string): string => {
+        const textPath = join(dir, `${name}.txt`);
+        writeFileSync(textPath, hook, "utf8");
+        const outPath = join(dir, `${name}.mp4`);
+        execFileSync(
+          FFMPEG,
+          ffmpegArgs({
+            sourcePath: src,
+            textPaths: [textPath],
+            outPath,
+            fontPath: FONT,
+            hookLines: [hook],
+            hasAudio: true,
+            position: "top",
+          }),
+          { stdio: ["ignore", "ignore", "pipe"] }
+        );
+        const png = join(dir, `${name}.png`);
+        execFileSync(FFMPEG, ["-y", "-v", "error", "-i", outPath, "-frames:v", "1", png], {
+          stdio: ["ignore", "ignore", "pipe"],
+        });
+        return crypto.createHash("md5").update(readFileSync(png)).digest("hex");
+      };
+
+      const fire = frameHash("fire", "🔥🔥🔥");
+      const sun = frameHash("sun", "☀☀☀");
+      const latin = frameHash("latin", "abc");
+
+      // ffmpeg отработал без ошибки, ролик уехал бы на апрув и в Instagram,
+      // но в кадре вместо хука три одинаковых пустых квадрата: два совершенно
+      // разных текста дали один и тот же кадр.
+      expect(fire).toBe(sun);
+      expect(fire).not.toBe(latin);
+      // После починки: такой хук до ffmpeg вообще не доходит (ошибка валидации).
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// I. Правка описания: caption теперь пишется в Blob раньше отправки карточки,
+//    поэтому сорвавшаяся отправка больше не теряет текст без следа.
+// ---------------------------------------------------------------------------
+describe("I. новое описание пропадает молча, если карточку не удалось переотправить", () => {
+  it("исправлено: caption сохраняется до отправки карточки, даже если отправка не удалась", async () => {
+    const item: Item = { ...base, status: "editing", editPromptId: 77, caption: "старое описание" };
+    const saveItem = vi.fn(async () => {});
+    const notify = vi.fn(async () => {});
+    const deps = {
+      now: () => Date.now(),
+      loadItem: async () => item,
+      listItems: async () => [item],
+      saveItem,
+      deleteBlobQuiet: async () => {},
+      nextFreeSlot: () => "2026-08-19T02:00:00.000Z",
+      answerCallback: async () => {},
+      dropKeyboard: async () => {},
+      editCaption: async () => {},
+      askForReply: async () => 1,
+      // Telegram отдаёт 429/5xx на sendVideo — это штатная жизнь бота.
+      sendVideoWithButtons: async () => {
+        throw new Error("Telegram sendVideo failed (429): Too Many Requests");
+      },
+      notify,
+      formatSlot: (iso: string) => iso,
+    } as unknown as ApproveDeps;
+
+    await expect(
+      handleEditReply(
+        { chatId: -100, threadId: null, text: "новое описание", replyToMessageId: 77 },
+        deps
+      )
+    ).rejects.toThrow(/429/);
+
+    // Текст сохранён ДО отправки карточки: даже когда sendVideoWithButtons
+    // упал, caption не потерян — ролик просто остался editing с новым текстом
+    // наготове, а не сиротской карточкой в чате.
+    expect(saveItem).toHaveBeenCalledWith(
+      expect.objectContaining({ caption: "новое описание", status: "review" })
+    );
+    expect(notify).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// J. Сорванное создание пачки теперь откатывает и файлы, и уже созданные
+//    записи задач вместе с записью пачки — фантомов не остаётся.
+// ---------------------------------------------------------------------------
+describe("J. откат startBatch оставляет уже созданные задачи в хранилище", () => {
+  it("исправлено: откат сносит и файлы, и уже созданные записи задач с записью пачки", async () => {
+    const pairs = [
+      { hook: "Хук 1", caption: "О" },
+      { hook: "Хук 2", caption: "О" },
+      { hook: "Хук 3", caption: "О" },
+    ];
+    const files = [
+      { url: "https://blob/1.mp4", bytes: 10 },
+      { url: "https://blob/2.mp4", bytes: 10 },
+      { url: "https://blob/3.mp4", bytes: 10 },
+    ];
+
+    const saved: Item[] = [];
+    const deleted: string[] = [];
+    const saveItem = vi.fn(async (item: Item) => {
+      if (saved.length === 2) throw new Error("blob down");
+      saved.push(item);
+    });
+
+    await expect(
+      startBatch(
+        { chatId: -100, threadId: null, pairs, files },
+        {
+          saveItem,
+          saveBatch: async (_b: Batch) => {},
+          triggerRender: async () => {},
+          deleteBlobQuiet: async (url: string) => {
+            deleted.push(url);
+          },
+          now: () => new Date("2026-08-19T00:00:00.000Z"),
+          newId: (() => {
+            let n = 0;
+            return () => `id${(n += 1)}`;
+          })(),
+        }
+      )
+    ).rejects.toThrow(/blob down/);
+
+    // Файлы удалены все три...
+    expect(files.every((f) => deleted.includes(f.url))).toBe(true);
+    // ...и обе уже созданные записи задач тоже удалены — фантомов не остаётся.
+    expect(deleted.filter((u) => u.startsWith("farm/items/"))).toHaveLength(2);
+    // ...и запись самой пачки снесена вместе с ними.
+    expect(deleted.some((u) => u.startsWith("farm/batches/"))).toBe(true);
+    expect(deleted).toHaveLength(6);
+    // saveItem реально вызывался дважды до отказа — это те же записи, что попали в deleted.
+    expect(saved).toHaveLength(2);
+    expect(saved.every((i) => i.status === "pending")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// L. Собранный ролик, который не удалось отправить в Telegram, теперь не
+//    остаётся в Blob навсегда: runRenderTick удаляет его сам, по url,
+//    запомненному в локальной переменной сразу после renderItem.
+// ---------------------------------------------------------------------------
+describe("L. отказ sendVideo оставляет собранный ролик в Blob навсегда", () => {
+  it("исправлено: отказ sendVideo удаляет уже собранный ролик из farm/out/", async () => {
+    const item: Item = { ...base, itemId: "i9", status: "pending", videoUrl: null, messageId: null };
+    const outUrl = "https://blob.public.blob.vercel-storage.com/farm/out/i9.mp4";
+
+    const saved: Item[] = [];
+    const deleted: string[] = [];
+    let listed = [item];
+
+    await runRenderTick("b1", {
+      now: () => Date.parse("2026-08-19T00:00:00.000Z"),
+      listItems: async () => listed,
+      saveItem: async (i: Item) => {
+        saved.push(i);
+        listed = [i];
+      },
+      renderItem: async () => outUrl,
+      // Ролик длиннее ~40 секунд весит больше 20 МБ, а по URL Telegram принимает
+      // максимум 20 МБ — отказ здесь штатный, а не экзотический.
+      sendVideoWithButtons: async () => {
+        throw new Error("Telegram sendVideo failed (400): Bad Request: file is too big");
+      },
+      deleteBlobQuiet: async (url: string) => {
+        deleted.push(url);
+      },
+      notify: async () => {},
+      triggerRender: async () => {},
+    });
+
+    const last = saved[saved.length - 1];
+    expect(last.status).toBe("failed");
+    // Ссылка на собранный ролик в самой задаче не хранится — вместо этого его
+    // удаляют сразу, за счёт локальной переменной, куда renderItem вернул url.
+    expect(last.videoUrl).toBeNull();
+    expect(deleted).toContain(outUrl);
+
+    // Уборке сироту искать уже не нужно: ролик удалён сразу в момент отказа, а
+    // не оставлен висеть в надежде на purge (который всё равно смотрит только
+    // на item.videoUrl/item.sourceUrl, а не листает farm/out/).
+    const { purge } = classifyForCleanup(
+      [{ ...last, createdAt: "2026-08-01T00:00:00.000Z" }],
+      Date.parse("2026-08-19T00:00:00.000Z")
+    );
+    expect(purge).toHaveLength(1);
+    expect(purge[0].videoUrl).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// K. Номер блока в ошибке валидации сдвигается, если раньше был битый блок.
+// ---------------------------------------------------------------------------
+describe("K. «блок N» в ошибке хука указывает не на тот блок", () => {
+  it("ДЕФЕКТ: виноват блок 3, а форма пишет «блок 2»", () => {
+    const raw = [
+      "Только хук",                       // блок 1 — без описания
+      "---",
+      "Хук два",                          // блок 2 — нормальный
+      "Описание два",
+      "---",
+      "Assalamualaikumwarahmatullahi",    // блок 3 — хук не переносится
+      "Описание три",
+    ].join("\n");
+
+    const { pairs, errors } = parseBlocks(raw);
+    expect(errors).toEqual(["блок 1: есть хук, но нет описания"]);
+    expect(pairs).toHaveLength(2);
+
+    const files = [
+      { url: "https://blob/1.mp4", bytes: 10 },
+      { url: "https://blob/2.mp4", bytes: 10 },
+    ];
+    // Именно так их складывает страница пачки: [...parseErrors, ...validateBatch].
+    const shown = [...errors, ...validateBatch({ pairs, files })];
+    expect(shown[1]).toBe("блок 2: хук не влезает в 3 строки по 26 знаков");
+    // Хук блока 2 при этом безупречен — сообщение показывает на чужой блок.
+    expect(pairs[1].hook).toBe("Assalamualaikumwarahmatullahi");
+    // После починки: нумерация в validateBatch сквозная по исходным блокам.
+  });
+});
