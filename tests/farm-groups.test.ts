@@ -141,3 +141,26 @@ describe("validateGroups", () => {
     ]);
   });
 });
+
+describe("validateAssignment", () => {
+  it("не считает повторяющиеся подложки как отдельные файлы", async () => {
+    const { assignSources, validateAssignment } = await import("../lib/farm/start");
+    // Шесть подложек на шестьдесят хуков: массив sources длиной 60 с повторами.
+    const big = Array.from({ length: 6 }, (_, i) => ({
+      url: `https://blob/v${i}.mp4`,
+      bytes: 85 * 1024 * 1024,
+    }));
+    const groups = [{ hooks: Array.from({ length: 60 }, (_, i) => `Хук ${i}`), caption: "Описание" }];
+    const { pairs, sources } = assignSources(groups, big);
+
+    expect(sources).toHaveLength(60);
+    // Раньше здесь всплывало «файлов 60, лимит 50» и вес в десять раз больше.
+    expect(validateAssignment(pairs, sources)).toEqual([]);
+  });
+
+  it("ловит рассинхрон хуков и подложек", async () => {
+    const { validateAssignment } = await import("../lib/farm/start");
+    const errors = validateAssignment([{ hook: "Хук", caption: "О" }], []);
+    expect(errors[0]).toContain("раздача сломана");
+  });
+});

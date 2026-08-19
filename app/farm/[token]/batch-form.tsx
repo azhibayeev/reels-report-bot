@@ -1,7 +1,7 @@
 "use client";
 
 import { upload } from "@vercel/blob/client";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { parseHookList } from "../../../lib/farm/parse";
 import { validateGroups } from "../../../lib/farm/start";
 import {
@@ -27,6 +27,17 @@ const POSITION_LABELS: Record<HookPosition, string> = {
 
 const EMPTY_GROUP: Group = { hooksText: "", caption: "", music: null };
 
+// Черновик текста живёт в браузере: хуки и описания набираются долго, а
+// обновление страницы или случайное закрытие вкладки стирало их подчистую.
+// Файлы так сохранить нельзя — их придётся выбрать заново.
+const DRAFT_KEY = "farm-batch-draft";
+
+interface Draft {
+  groups: { hooksText: string; caption: string }[];
+  position: HookPosition;
+  seconds: ReelDuration;
+}
+
 export default function BatchForm({
   token,
   defaultPosition,
@@ -42,6 +53,36 @@ export default function BatchForm({
   const [done, setDone] = useState(0);
   const [message, setMessage] = useState("");
   const [total, setTotal] = useState<number | null>(null);
+
+  // Восстановление после монтирования, а не в useState: на сервере localStorage
+  // нет, и чтение при первом рендере разошлось бы с серверной разметкой.
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(DRAFT_KEY);
+      if (!raw) return;
+      const draft = JSON.parse(raw) as Partial<Draft>;
+      if (Array.isArray(draft.groups) && draft.groups.length > 0) {
+        setGroups(draft.groups.map((g) => ({ hooksText: g.hooksText ?? "", caption: g.caption ?? "", music: null })));
+      }
+      if (draft.position) setPosition(draft.position);
+      if (draft.seconds) setSeconds(draft.seconds);
+    } catch {
+      // Битый черновик — не повод ломать форму: начнём с пустой.
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      const draft: Draft = {
+        groups: groups.map((g) => ({ hooksText: g.hooksText, caption: g.caption })),
+        position,
+        seconds,
+      };
+      window.localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    } catch {
+      // Переполнилось хранилище или приватный режим — черновик не критичен.
+    }
+  }, [groups, position, seconds]);
 
   // Результаты заливки переживают неудачную попытку (ретрай не льёт заново уже
   // загруженные файлы). Ref, а не state: обновление на каждый файл в трёх
@@ -144,6 +185,11 @@ export default function BatchForm({
 
       setTotal(data.total ?? hookCount);
       setStage("done");
+      try {
+        window.localStorage.removeItem(DRAFT_KEY);
+      } catch {
+        // Не смогли убрать черновик — он просто перезапишется следующей пачкой.
+      }
       resultsRef.current = []; // успех — следующая пачка начнётся с чистого кэша
     } catch (error) {
       setStage("error");
@@ -178,6 +224,10 @@ export default function BatchForm({
           onChange={(event) => onPick(event.target.files)}
           disabled={busy || stage === "done"}
         />
+        <p style={{ margin: ".4rem 0 0", color: "#566b60", fontSize: ".9rem" }}>
+          Тексты сохраняются в браузере и переживут обновление страницы. Файлы — нет, их придётся
+          выбрать заново.
+        </p>
       </section>
 
       <section>

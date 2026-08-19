@@ -178,6 +178,26 @@ export function validateBatch(input: { pairs: Pair[]; files: UploadedFile[] }): 
   return errors;
 }
 
+/**
+ * Проверка перед созданием задач. Здесь НЕ повторяются лимиты на файлы: после
+ * раздачи по кругу массив подложек длиной в число хуков и с повторами — считать
+ * его «загруженными файлами» значит увидеть 60 файлов вместо шести и вес в
+ * десять раз больше настоящего. Размеры и количество проверяет validateGroups
+ * по исходному списку загрузки.
+ */
+export function validateAssignment(pairs: Pair[], sources: UploadedFile[]): string[] {
+  const errors: string[] = [];
+  if (pairs.length !== sources.length) {
+    errors.push(`хуков ${pairs.length}, подложек ${sources.length} — раздача сломана`);
+  }
+  pairs.forEach((pair, i) => {
+    if (!fitHook(pair.hook)) {
+      errors.push(`ролик ${i + 1}: хук слишком длинный даже мельчайшим кеглем`);
+    }
+  });
+  return errors;
+}
+
 export interface StartDeps {
   saveItem: (item: Item) => Promise<void>;
   saveBatch: (batch: Batch) => Promise<void>;
@@ -254,7 +274,7 @@ export async function startBatch(
   },
   deps: StartDeps
 ): Promise<{ batchId: string; total: number }> {
-  const errors = validateBatch(input);
+  const errors = validateAssignment(input.pairs, input.files);
   if (errors.length) throw new Error(errors.join("; "));
 
   const nowMs = deps.now().getTime();
