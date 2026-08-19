@@ -96,7 +96,13 @@ async function runAccountReport(acc: AccountConfig, now: Date): Promise<AccountR
       const png = await renderChartPng(
         buildTrendChart(viewsSeries, clicksSeries, `Динамика за 14 дней · ${acc.label}`)
       );
-      await sendPhoto(png, `📈 Динамика за 14 дней · ${escapeHtml(acc.label)}`);
+      // Пока у аккаунта нет двух замеров, линии просмотров на графике не будет —
+      // говорим об этом прямо, иначе это читается как потерянные данные.
+      const note =
+        viewsSeries.length === 0
+          ? "\n<i>Просмотры за день появятся, когда наберётся два ежедневных замера.</i>"
+          : "";
+      await sendPhoto(png, `📈 Динамика за 14 дней · ${escapeHtml(acc.label)}${note}`);
       chart = `отправлен (просмотры: ${viewsSeries.length} дн., заходы: ${clicksSeries.length} дн.)`;
     }
   } catch (e) {
