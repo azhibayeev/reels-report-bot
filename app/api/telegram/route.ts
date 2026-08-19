@@ -14,11 +14,13 @@ import {
   batchesToKick,
   formatQueue,
   parseFarmCommand,
+  parseRetryCount,
   parseRhythm,
   parseStylePosition,
   positionName,
+  retryableItems,
 } from "../../../lib/farm/commands";
-import { listItems } from "../../../lib/farm/store";
+import { listItems, saveItem } from "../../../lib/farm/store";
 import {
   loadDefaultPosition,
   loadRhythm,
@@ -73,7 +75,8 @@ const HELP =
   "/batch — загрузить пачку роликов фермы (ссылка на 30 минут)\n" +
   "/reels — сводка по ферме: апрув, очередь, сбои\n" +
   "/style верх|центр|низ — дефолтная позиция хука для будущих пачек (без аргумента — показать текущую)\n" +
-  "/rhythm плотно|обычно|спокойно — регулярность выпуска (или своими числами: /rhythm 30 20)";
+  "/rhythm плотно|обычно|спокойно — регулярность выпуска (или своими числами: /rhythm 30 20)\n" +
+  "/retry [N] — вернуть в сборку сбойные ролики (по умолчанию 3)";
 
 // Живой замер: список рилсов + актуальные просмотры. Снапшот НЕ сохраняем,
 // чтобы не сдвигать базу ежедневного отчёта.
@@ -210,6 +213,44 @@ async function handleFarmCommand(cmd: string, text: string, opts: SendOptions, r
     }
     return true;
   }
+  if (cmd === "/retry") {
+    const items = await listItems();
+    const broken = retryableItems(items);
+    if (broken.length === 0) {
+      await sendMessage("Пересобирать нечего: сбойных роликов с целой подложкой нет.", opts);
+      return true;
+    }
+
+    const take = broken.slice(0, parseRetryCount(text));
+    const batches = new Set<string>();
+    let restored = 0;
+    for (const item of take) {
+      try {
+        await saveItem({ ...item, status: "pending", error: null, renderingAt: null });
+        batches.add(item.batchId);
+        restored += 1;
+      } catch (error) {
+        console.error("farm retry save failed", item.itemId, error);
+      }
+    }
+
+    for (const batchId of batches) {
+      try {
+        await triggerRender(batchId);
+      } catch (error) {
+        // Цепочку добьёт /reels или суточный крон — команда об этом уже сказала.
+        console.error("farm retry trigger failed", batchId, error);
+      }
+    }
+
+    const rest = broken.length - restored;
+    await sendMessage(
+      `Вернул в сборку: ${restored}. Сбойных осталось: ${rest}.` +
+        (rest > 0 ? `\nЕсли эти соберутся — /retry ${rest} доберёт остальные.` : ""),
+      opts
+    );
+    return true;
+  }
   if (cmd === "/rhythm") {
     const parsed = parseRhythm(text, RHYTHM_PRESETS);
     const current = (await loadRhythm()) ?? { minutes: 45, perDay: 15 };
@@ -299,6 +340,7 @@ export async function GET(req: NextRequest) {
         { command: "batch", description: "Загрузить пачку роликов фермы" },
         { command: "reels", description: "Сводка по ферме: апрув, очередь, сбои" },
         { command: "rhythm", description: "Регулярность выпуска роликов" },
+        { command: "retry", description: "Пересобрать сбойные ролики" },
         { command: "style", description: "Дефолтная позиция хука для будущих пачек" },
       ],
     }),

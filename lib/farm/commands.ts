@@ -14,13 +14,14 @@ export function batchesToKick(items: Item[], nowMs: number): string[] {
   return ids;
 }
 
-export function parseFarmCommand(text: string): "batch" | "reels" | "style" | "rhythm" | null {
+export function parseFarmCommand(text: string): "batch" | "reels" | "style" | "rhythm" | "retry" | null {
   // "/batch@MyReelsBot arg" -> "batch"; Telegram дописывает имя бота в группах.
   const cmd = text.trim().split(/\s+/)[0]?.split("@")[0].toLowerCase();
   if (cmd === "/batch") return "batch";
   if (cmd === "/reels") return "reels";
   if (cmd === "/style") return "style";
   if (cmd === "/rhythm") return "rhythm";
+  if (cmd === "/retry") return "retry";
   return null;
 }
 
@@ -63,6 +64,25 @@ export function parseRhythm(text: string, presets: Record<string, { minutes: num
     return { minutes: Number(numbers[0]), perDay: Number(numbers[1]) };
   }
   return null;
+}
+
+/**
+ * Сбойные ролики, которые можно пересобрать: упавшие ДО получения видео и с целой
+ * подложкой. Упавшие на публикации сюда не попадают намеренно — повторная заливка
+ * рискует дублем в ленте, а это хуже потерянного ролика.
+ */
+export function retryableItems(items: Item[]): Item[] {
+  return items
+    .filter((i) => i.status === "failed" && !i.videoUrl && Boolean(i.sourceUrl))
+    .sort((a, b) => a.index - b.index);
+}
+
+/** «/retry 5» — сколько роликов вернуть в работу. Без числа — три: после починки
+ * инфраструктуры дешевле проверить на трёх, чем снова получить лавину. */
+export function parseRetryCount(text: string): number {
+  const arg = text.trim().split(/\s+/)[1];
+  const n = Number(arg);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 3;
 }
 
 export function positionName(p: HookPosition): string {
