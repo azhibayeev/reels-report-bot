@@ -14,12 +14,13 @@ export function batchesToKick(items: Item[], nowMs: number): string[] {
   return ids;
 }
 
-export function parseFarmCommand(text: string): "batch" | "reels" | "style" | null {
+export function parseFarmCommand(text: string): "batch" | "reels" | "style" | "rhythm" | null {
   // "/batch@MyReelsBot arg" -> "batch"; Telegram дописывает имя бота в группах.
   const cmd = text.trim().split(/\s+/)[0]?.split("@")[0].toLowerCase();
   if (cmd === "/batch") return "batch";
   if (cmd === "/reels") return "reels";
   if (cmd === "/style") return "style";
+  if (cmd === "/rhythm") return "rhythm";
   return null;
 }
 
@@ -42,6 +43,26 @@ export function parseStylePosition(text: string): HookPosition | "show" | null {
   const arg = text.trim().split(/\s+/).slice(1).join(" ").toLowerCase();
   if (!arg) return "show";
   return POSITION_SYNONYMS.get(arg) ?? null;
+}
+
+export type ParsedRhythm = { minutes: number; perDay: number } | "show" | null;
+
+/**
+ * /rhythm — регулярность выпуска. Понимает пресет («плотно», «обычно»,
+ * «спокойно») и пару чисел «интервал количество»: /rhythm 30 20.
+ */
+export function parseRhythm(text: string, presets: Record<string, { minutes: number; perDay: number }>): ParsedRhythm {
+  const arg = text.trim().split(/\s+/).slice(1).join(" ").toLowerCase().trim();
+  if (!arg) return "show";
+
+  const preset = presets[arg];
+  if (preset) return preset;
+
+  const numbers = arg.match(/\d+/g);
+  if (numbers && numbers.length === 2) {
+    return { minutes: Number(numbers[0]), perDay: Number(numbers[1]) };
+  }
+  return null;
 }
 
 export function positionName(p: HookPosition): string {

@@ -14,11 +14,20 @@ import {
   batchesToKick,
   formatQueue,
   parseFarmCommand,
+  parseRhythm,
   parseStylePosition,
   positionName,
 } from "../../../lib/farm/commands";
 import { listItems } from "../../../lib/farm/store";
-import { loadDefaultPosition, saveDefaultPosition } from "../../../lib/farm/style";
+import {
+  loadDefaultPosition,
+  loadRhythm,
+  MAX_PER_DAY,
+  MIN_SLOT_MINUTES,
+  RHYTHM_PRESETS,
+  saveDefaultPosition,
+  saveRhythm,
+} from "../../../lib/farm/style";
 import { answerCallback } from "../../../lib/farm/telegram";
 import { requireEnv, triggerRender } from "../../../lib/farm/tick";
 import { BATCH_TOKEN_TTL_MS, signBatchToken } from "../../../lib/farm/tokens";
@@ -63,7 +72,8 @@ const HELP =
   "/targettotal — таргет за всё время (тотал по всем показателям)\n" +
   "/batch — загрузить пачку роликов фермы (ссылка на 30 минут)\n" +
   "/reels — сводка по ферме: апрув, очередь, сбои\n" +
-  "/style верх|центр|низ — дефолтная позиция хука для будущих пачек (без аргумента — показать текущую)";
+  "/style верх|центр|низ — дефолтная позиция хука для будущих пачек (без аргумента — показать текущую)\n" +
+  "/rhythm плотно|обычно|спокойно — регулярность выпуска (или своими числами: /rhythm 30 20)";
 
 // Живой замер: список рилсов + актуальные просмотры. Снапшот НЕ сохраняем,
 // чтобы не сдвигать базу ежедневного отчёта.
@@ -200,6 +210,39 @@ async function handleFarmCommand(cmd: string, text: string, opts: SendOptions, r
     }
     return true;
   }
+  if (cmd === "/rhythm") {
+    const parsed = parseRhythm(text, RHYTHM_PRESETS);
+    const current = (await loadRhythm()) ?? { minutes: 45, perDay: 15 };
+    if (parsed === "show") {
+      const perDayHours = ((current.perDay - 1) * current.minutes) / 60;
+      await sendMessage(
+        `Сейчас: каждые ${current.minutes} мин, ${current.perDay} роликов в день ` +
+          `(последний примерно через ${perDayHours.toFixed(1)} ч после первого).\n\n` +
+          `Пресеты: /rhythm плотно (30 мин, 20/день) · /rhythm обычно (45, 15) · /rhythm спокойно (90, 8)\n` +
+          `Или своими числами: /rhythm 30 20`,
+        opts
+      );
+      return true;
+    }
+    if (!parsed) {
+      await sendMessage("Не понял. Например: /rhythm обычно или /rhythm 30 20", opts);
+      return true;
+    }
+    if (parsed.minutes < MIN_SLOT_MINUTES || parsed.perDay < 1 || parsed.perDay > MAX_PER_DAY) {
+      await sendMessage(
+        `Интервал не меньше ${MIN_SLOT_MINUTES} минут, роликов в день от 1 до ${MAX_PER_DAY}.`,
+        opts
+      );
+      return true;
+    }
+    await saveRhythm(parsed);
+    await sendMessage(
+      `Регулярность: каждые ${parsed.minutes} мин, ${parsed.perDay} в день. ` +
+        `Уже назначенные слоты не двигаются — новое расписание применяется к тому, что одобрите дальше.`,
+      opts
+    );
+    return true;
+  }
   if (cmd === "/style") {
     const arg = parseStylePosition(text);
     if (arg === "show") {
@@ -255,6 +298,7 @@ export async function GET(req: NextRequest) {
         { command: "targettotal", description: "Таргет за всё время (тотал)" },
         { command: "batch", description: "Загрузить пачку роликов фермы" },
         { command: "reels", description: "Сводка по ферме: апрув, очередь, сбои" },
+        { command: "rhythm", description: "Регулярность выпуска роликов" },
         { command: "style", description: "Дефолтная позиция хука для будущих пачек" },
       ],
     }),
@@ -314,7 +358,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
     try {
-      await handleCallback({ id: cb.id, data: cb.data ?? "", chatId: Number(cbChatId) }, liveApproveDeps());
+      await handleCallback({ id: cb.id, data: cb.data ?? "", chatId: Number(cbChatId) }, liveApproveDeps(await loadRhythm()));
     } catch (e) {
       console.error("callback_query failed:", e);
       try {
@@ -339,7 +383,7 @@ export async function POST(req: NextRequest) {
           text: msg.text ?? "",
           replyToMessageId: msg.reply_to_message.message_id,
         },
-        liveApproveDeps()
+        liveApproveDeps(await loadRhythm())
       );
       if (handled) return NextResponse.json({ ok: true });
     } catch (e) {

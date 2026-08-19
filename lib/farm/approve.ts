@@ -36,8 +36,10 @@ export interface ApproveDeps {
   formatSlot: (iso: string) => string;
 }
 
-export function liveApproveDeps(): ApproveDeps {
-  const cfg = slotConfigFromEnv();
+export function liveApproveDeps(rhythm?: { minutes: number; perDay: number } | null): ApproveDeps {
+  // Регулярность из состояния важнее переменных окружения: её меняют командой
+  // /rhythm без редеплоя, а env остаётся значением по умолчанию.
+  const cfg = { ...slotConfigFromEnv(), ...(rhythm ? { minutes: rhythm.minutes, perDay: rhythm.perDay } : {}) };
   return {
     now: () => Date.now(),
     loadItem,
