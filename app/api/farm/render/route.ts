@@ -13,7 +13,7 @@ import { requireEnv, runRenderTick, triggerRender } from "../../../../lib/farm/t
 import { tickKey } from "../../../../lib/farm/tokens";
 import { DEFAULT_POSITION, Item } from "../../../../lib/farm/types";
 import { renderHook, Runner } from "../../../../lib/farm/render";
-import { HOOK_LINE_CHARS, HOOK_MAX_LINES, wrapHook } from "../../../../lib/farm/wrap";
+import { fitHook, HOOK_MAX_LINES } from "../../../../lib/farm/wrap";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -86,8 +86,9 @@ async function renderItem(item: Item): Promise<string> {
     if (!res.ok) throw new Error(`Исходник не скачался (${res.status}): ${item.sourceUrl}`);
     await writeFile(sourcePath, Buffer.from(await res.arrayBuffer()));
 
-    const lines = wrapHook(item.hook);
-    if (!lines) throw new Error(`хук не переносится в ${HOOK_MAX_LINES} строки по ${HOOK_LINE_CHARS} знаков`);
+    const fitted = fitHook(item.hook);
+    if (!fitted) throw new Error(`хук слишком длинный: не помещается в ${HOOK_MAX_LINES} строки`);
+    const lines = fitted.lines;
 
     const font = fontPath();
 
@@ -121,6 +122,7 @@ async function renderItem(item: Item): Promise<string> {
         position: item.position ?? DEFAULT_POSITION,
         musicPath,
         seconds: item.seconds,
+        fontSize: fitted.fontSize,
       },
       {
         runner,

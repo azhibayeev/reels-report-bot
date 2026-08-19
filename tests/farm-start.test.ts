@@ -26,8 +26,8 @@ describe("validateBatch", () => {
   });
 
   it("тяжёлый файл и перегруженная пачка — ошибки", () => {
-    const heavy = [{ url: files[0].url, bytes: 70 * 1024 * 1024 }, files[1]];
-    expect(validateBatch({ pairs, files: heavy })).toContain("файл 1: 70 МБ, лимит 60 МБ");
+    const heavy = [{ url: files[0].url, bytes: 170 * 1024 * 1024 }, files[1]];
+    expect(validateBatch({ pairs, files: heavy })).toContain("файл 1: 170 МБ, лимит 150 МБ");
   });
 });
 

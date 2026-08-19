@@ -104,11 +104,16 @@ describe("validateGroups", () => {
     expect(validateGroups([{ hooks: [long], caption: "Описание" }], [file(1)])).toEqual([]);
   });
 
-  it("хук в 120 знаков уже не влезает", () => {
-    const tooLong =
+  it("хук в 120 знаков теперь проходит: кегль подбирается под длину", () => {
+    const long =
       "Sebagian larangan yang kamu pegang hari ini datang dari kebiasaan tetangga dan bukan dari dalil mana pun yang sahih";
-    const errors = validateGroups([{ hooks: [tooLong], caption: "Описание" }], [file(1)]);
-    expect(errors.some((e) => e.includes("не влезает"))).toBe(true);
+    expect(validateGroups([{ hooks: [long], caption: "Описание" }], [file(1)])).toEqual([]);
+  });
+
+  it("абсурдно длинный хук всё же отклоняется", () => {
+    const absurd = "kata ".repeat(60);
+    const errors = validateGroups([{ hooks: [absurd], caption: "Описание" }], [file(1)]);
+    expect(errors.some((e) => e.includes("слишком длинный"))).toBe(true);
   });
 
   it("нумерует ошибки по группе и месту хука в ней", () => {

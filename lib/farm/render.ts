@@ -12,6 +12,8 @@ export interface RenderSpec {
   musicPath?: string | null;
   /** Длина ролика в секундах; не задана — REEL_SECONDS. */
   seconds?: number;
+  /** Кегль хука: подбирается под длину, не задан — базовый. */
+  fontSize?: number;
 }
 
 export type Runner = (bin: string, args: string[]) => Promise<{ code: number; stderr: string }>;
@@ -32,7 +34,9 @@ const LINE_SPACING = 10;
 const FONT_SIZE = 54;
 // expansion=none обязателен: по умолчанию drawtext раскрывает %{...} и в тексте
 // из textfile — «100% gratis» роняет ffmpeg ошибкой "Stray % near ' gratis'".
-const STYLE = `fontsize=${FONT_SIZE}:fontcolor=white:borderw=3:bordercolor=black:shadowcolor=black@0.5:shadowx=2:shadowy=3:line_spacing=${LINE_SPACING}:expansion=none`;
+function style(fontSize: number): string {
+  return `fontsize=${fontSize}:fontcolor=white:borderw=3:bordercolor=black:shadowcolor=black@0.5:shadowx=2:shadowy=3:line_spacing=${LINE_SPACING}:expansion=none`;
+}
 
 const POSITION_Y: Record<HookPosition, number> = { top: 0.18, center: 0.42, bottom: 0.62 };
 
@@ -68,14 +72,15 @@ export function ffmpegArgs(spec: RenderSpec): string[] {
   // drawtext центрирует блок текста целиком, поэтому вторая строка хука начинала
   // бы там же, где первая — по одному drawtext на строку, у каждого свой x/y.
   // text_align появился только в ffmpeg 7.0, у нас 6.0 (ffmpeg-static).
+  const fontSize = spec.fontSize ?? FONT_SIZE;
   const drawtexts = spec.hookLines.map((_, i) => {
-    const offset = i * (FONT_SIZE + LINE_SPACING);
+    const offset = i * (fontSize + LINE_SPACING);
     const y = offset === 0 ? `h*${multiplier}` : `h*${multiplier}+${offset}`;
     // Текст отдаём файлом, чтобы уберечься от разборщика строки фильтра: символы
     // : ' , ломают его, а апострофы в индонезийском (Qur'an) встречаются постоянно.
     // От раскрытия %{...} и от съедания \ файл сам по себе не спасает — за это
     // отвечает expansion=none в STYLE.
-    return `drawtext=fontfile=${spec.fontPath}:textfile=${spec.textPaths[i]}:${STYLE}:x=(w-text_w)/2:y=${y}`;
+    return `drawtext=fontfile=${spec.fontPath}:textfile=${spec.textPaths[i]}:${style(fontSize)}:x=(w-text_w)/2:y=${y}`;
   });
 
   const filter = ["scale=1080:1920:force_original_aspect_ratio=increase", "crop=1080:1920", ...drawtexts].join(",");

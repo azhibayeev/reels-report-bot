@@ -1,9 +1,13 @@
-import { HOOK_LINE_CHARS, HOOK_MAX_LINES, wrapHook } from "./wrap";
+import { fitHook, HOOK_LINE_CHARS, HOOK_MAX_LINES, HOOK_SIZES, wrapHook } from "./wrap";
 import { BATCHES_PREFIX, itemPath, loadItem } from "./store";
 import { Batch, DEFAULT_POSITION, HookPosition, Item, Pair } from "./types";
 
-export const MAX_FILE_BYTES = 60 * 1024 * 1024;
-export const MAX_BATCH_BYTES = 1024 ** 3;
+// Реальные подложки с телефона весят по 100+ МБ; 150 оставляет запас, а /tmp
+// функции (512 МБ) держит исходник вместе с результатом.
+export const MAX_FILE_BYTES = 150 * 1024 * 1024;
+// Два гигабайта на пачку: десяток тяжёлых подложек в один заход. Исходники
+// удаляются сразу после рендера, поэтому пик в хранилище недолгий.
+export const MAX_BATCH_BYTES = 2 * 1024 ** 3;
 export const MAX_FILES = 50;
 
 export interface UploadedFile {
@@ -105,8 +109,12 @@ export function validateGroups(groups: HookGroup[], files: UploadedFile[]): stri
       errors.push(`${label}описание ${group.caption.length} знаков, лимит ${MAX_CAPTION_LENGTH}`);
     }
     group.hooks.forEach((hook, hi) => {
-      if (!wrapHook(hook)) {
-        errors.push(`${label}хук ${hi + 1}: не влезает в ${HOOK_MAX_LINES} строки по ${HOOK_LINE_CHARS} знаков`);
+      // Кегль подбирается под длину, поэтому отказ означает по-настоящему
+      // чрезмерный хук, а не превышение одного фиксированного лимита.
+      if (!fitHook(hook)) {
+        errors.push(
+          `${label}хук ${hi + 1}: слишком длинный — не помещается даже кеглем ${HOOK_SIZES[HOOK_SIZES.length - 1]} в ${HOOK_MAX_LINES} строки`
+        );
       }
       const badChar = firstCharOutsideHookFont(hook);
       if (badChar) {
@@ -124,7 +132,7 @@ export function validateGroups(groups: HookGroup[], files: UploadedFile[]): stri
 
   const total = files.reduce((sum, f) => sum + f.bytes, 0);
   if (total > MAX_BATCH_BYTES) {
-    errors.push(`пачка ${Math.round(total / 1024 / 1024)} МБ, лимит 1024 МБ — разбейте на две`);
+    errors.push(`пачка ${Math.round(total / 1024 / 1024)} МБ, лимит ${MAX_BATCH_BYTES / 1024 / 1024} МБ — разбейте на две`);
   }
 
   return errors;
@@ -164,7 +172,7 @@ export function validateBatch(input: { pairs: Pair[]; files: UploadedFile[] }): 
 
   const total = files.reduce((sum, f) => sum + f.bytes, 0);
   if (total > MAX_BATCH_BYTES) {
-    errors.push(`пачка ${Math.round(total / 1024 / 1024)} МБ, лимит 1024 МБ — разбейте на две`);
+    errors.push(`пачка ${Math.round(total / 1024 / 1024)} МБ, лимит ${MAX_BATCH_BYTES / 1024 / 1024} МБ — разбейте на две`);
   }
 
   return errors;

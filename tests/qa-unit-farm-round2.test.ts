@@ -115,15 +115,15 @@ describe("C. лимиты пачки из Global Constraints", () => {
     expect(validateBatch({ pairs: exactPairs, files: exact })).toEqual([]);
   });
 
-  it("пачка тяжелее 1 ГБ — ошибка, ровно 1 ГБ — нет", () => {
+  it("пачка тяжелее лимита — ошибка, ровно лимит — нет", () => {
     // 20 файлов ниже потолка одного файла, но в сумме перебирающие гигабайт.
     const heavy = Array.from({ length: 20 }, (_, i) => ({ url: `${HOST}/farm/sources/${i}.mp4`, bytes: MAX_FILE_BYTES }));
     const heavyPairs = heavy.map((_, i) => ({ hook: `Хук ${i}`, caption: "Описание" }));
     expect(heavy.reduce((s, f) => s + f.bytes, 0)).toBeGreaterThan(MAX_BATCH_BYTES);
-    expect(validateBatch({ pairs: heavyPairs, files: heavy }).some((e) => e.includes("лимит 1024 МБ"))).toBe(true);
+    expect(validateBatch({ pairs: heavyPairs, files: heavy }).some((e) => e.includes(`лимит ${MAX_BATCH_BYTES / 1024 / 1024} МБ`))).toBe(true);
 
     const exact = [{ url: `${HOST}/farm/sources/x.mp4`, bytes: MAX_BATCH_BYTES }];
-    expect(validateBatch({ pairs: [pairs[0]], files: exact }).some((e) => e.includes("лимит 1024 МБ"))).toBe(false);
+    expect(validateBatch({ pairs: [pairs[0]], files: exact }).some((e) => e.includes(`лимит ${MAX_BATCH_BYTES / 1024 / 1024} МБ`))).toBe(false);
   });
 });
 
