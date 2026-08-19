@@ -80,11 +80,11 @@ const runner: Runner = (bin, args) =>
     child.on("close", (code) => resolve({ code: code ?? -1, stderr }));
   });
 
-async function probeHasAudio(sourcePath: string): Promise<boolean> {
+async function probeHasAudio(sourcePath: string, ffprobeBin: string): Promise<boolean> {
   try {
     const { code, stdout } = await new Promise<{ code: number; stdout: string }>((resolve, reject) => {
       const child = spawn(
-        ffprobePath(),
+        ffprobeBin,
         ["-v", "error", "-select_streams", "a", "-show_entries", "stream=codec_type", "-of", "csv=p=0", sourcePath],
         { stdio: ["ignore", "pipe", "ignore"] }
       );
@@ -105,6 +105,14 @@ async function probeHasAudio(sourcePath: string): Promise<boolean> {
 }
 
 async function renderItem(item: Item): Promise<string> {
+  // Инструменты проверяем ДО скачивания исходника. Иначе каждая пачка при
+  // сломанной сборке качает по сотне мегабайт на ролик и падает уже после —
+  // шестьдесят таких провалов сожгли пять гигабайт трафика Blob за минуты и
+  // довели хранилище до приостановки. Проверка стоит миллисекунды.
+  const ffmpeg = ffmpegPath();
+  const ffprobe = ffprobePath();
+  const font = fontPath();
+
   const dir = await mkdtemp(join(tmpdir(), "farm-"));
   try {
     const sourcePath = join(dir, "src.mp4");
@@ -116,9 +124,7 @@ async function renderItem(item: Item): Promise<string> {
     if (!fitted) throw new Error(`хук слишком длинный: не помещается в ${HOOK_MAX_LINES} строки`);
     const lines = fitted.lines;
 
-    const font = fontPath();
-
-    const hasAudio = await probeHasAudio(sourcePath);
+    const hasAudio = await probeHasAudio(sourcePath, ffprobe);
 
     // Дорожку тянем тем же способом, что подложку. Не скачалась — не повод
     // терять ролик: соберём его со звуком подложки и скажем об этом в логах.
@@ -153,7 +159,7 @@ async function renderItem(item: Item): Promise<string> {
       {
         runner,
         writeText: (p, t) => writeFile(p, t, "utf8"),
-        ffmpegPath: ffmpegPath(),
+        ffmpegPath: ffmpeg,
         fontReadable: async (p) => {
           try {
             await access(p, constants.R_OK);
