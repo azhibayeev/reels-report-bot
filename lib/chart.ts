@@ -37,53 +37,57 @@ export function chartSkipReason(views: DayPoint[], clicks: DayPoint[]): string |
   return `мало данных (дней с просмотрами: ${views.length}, с заходами: ${clicks.length})`;
 }
 
-// Конфиг Chart.js для QuickChart: две линии (просмотры/заходы) на двух шкалах.
+// Конфиг Chart.js для QuickChart: линии просмотров и заходов на своих шкалах.
+// Ряд без единой точки НЕ рисуем: пустая линия в легенде и её шкала с делениями
+// 0–1 читаются как потерянные данные, хотя данных просто ещё нет (первые дни
+// аккаунта: прирост просмотров считается между двумя замерами).
 export function buildTrendChart(
   views: DayPoint[],
   clicks: DayPoint[],
   title = "Динамика за 14 дней"
 ): Record<string, unknown> {
   const dates = Array.from(new Set([...views, ...clicks].map((p) => p.date))).sort();
+
+  const series = [
+    { points: views, label: "Просмотры за день", axisTitle: "Просмотры/день", color: "#2563eb" },
+    { points: clicks, label: "Заходы за день", axisTitle: "Заходы/день", color: "#f59e0b" },
+  ].filter((s) => s.points.length > 0);
+
+  // Одна линия — она же и есть главная шкала слева; две — просмотры слева, заходы справа.
+  const axisIds = series.length === 2 ? ["y", "y1"] : ["y"];
+
+  const scales: Record<string, unknown> = {};
+  series.forEach((s, i) => {
+    const right = axisIds[i] === "y1";
+    scales[axisIds[i]] = {
+      type: "linear",
+      position: right ? "right" : "left",
+      beginAtZero: true,
+      ...(right ? { grid: { drawOnChartArea: false } } : {}),
+      title: { display: true, text: s.axisTitle },
+    };
+  });
+
   return {
     type: "line",
     data: {
       labels: dates.map(ddmm),
-      datasets: [
-        {
-          label: "Просмотры за день",
-          data: align(dates, views),
-          yAxisID: "y",
-          borderColor: "#2563eb",
-          backgroundColor: "#2563eb",
-          tension: 0.3,
-          spanGaps: true,
-        },
-        {
-          label: "Заходы за день",
-          data: align(dates, clicks),
-          yAxisID: "y1",
-          borderColor: "#f59e0b",
-          backgroundColor: "#f59e0b",
-          tension: 0.3,
-          spanGaps: true,
-        },
-      ],
+      datasets: series.map((s, i) => ({
+        label: s.label,
+        data: align(dates, s.points),
+        yAxisID: axisIds[i],
+        borderColor: s.color,
+        backgroundColor: s.color,
+        tension: 0.3,
+        spanGaps: true,
+      })),
     },
     options: {
       plugins: {
         title: { display: true, text: title },
         legend: { position: "top" },
       },
-      scales: {
-        y: { type: "linear", position: "left", beginAtZero: true, title: { display: true, text: "Просмотры/день" } },
-        y1: {
-          type: "linear",
-          position: "right",
-          beginAtZero: true,
-          grid: { drawOnChartArea: false },
-          title: { display: true, text: "Заходы/день" },
-        },
-      },
+      scales,
     },
   };
 }

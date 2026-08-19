@@ -20,6 +20,33 @@ describe("buildTrendChart title", () => {
   });
 });
 
+describe("buildTrendChart with one empty series", () => {
+  it("does not draw a line for a series that has no data at all", () => {
+    // Первый день аккаунта: прирост просмотров считается между замерами, поэтому
+    // точек по просмотрам ещё нет. Пустая легенда и шкала 0–1 читаются как поломка.
+    const cfg = buildTrendChart([], clicks) as any;
+
+    expect(cfg.data.datasets.map((d: any) => d.label)).toEqual(["Заходы за день"]);
+    expect(Object.keys(cfg.options.scales)).toEqual(["y"]);
+    expect(cfg.options.scales.y.title.text).toBe("Заходы/день");
+  });
+
+  it("keeps the lone views line on the left axis too", () => {
+    const cfg = buildTrendChart(views, []) as any;
+
+    expect(cfg.data.datasets.map((d: any) => d.label)).toEqual(["Просмотры за день"]);
+    expect(Object.keys(cfg.options.scales)).toEqual(["y"]);
+    expect(cfg.options.scales.y.title.text).toBe("Просмотры/день");
+  });
+
+  it("still puts views left and clicks right when both have data", () => {
+    const cfg = buildTrendChart(views, clicks) as any;
+    expect(cfg.data.datasets.map((d: any) => d.label)).toEqual(["Просмотры за день", "Заходы за день"]);
+    expect(cfg.options.scales.y.position).toBe("left");
+    expect(cfg.options.scales.y1.position).toBe("right");
+  });
+});
+
 describe("chartSkipReason", () => {
   it("draws the chart as soon as one line has two points", () => {
     expect(chartSkipReason(views, [])).toBeNull();

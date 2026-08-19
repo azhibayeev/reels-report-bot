@@ -96,7 +96,13 @@ async function runAccountReport(acc: AccountConfig, now: Date): Promise<AccountR
       const png = await renderChartPng(
         buildTrendChart(viewsSeries, clicksSeries, `Динамика за 14 дней · ${acc.label}`)
       );
-      await sendPhoto(png, `📈 Динамика за 14 дней · ${escapeHtml(acc.label)}`);
+      // Пока у аккаунта нет двух замеров, линии просмотров на графике не будет —
+      // говорим об этом прямо, иначе это читается как потерянные данные.
+      const note =
+        viewsSeries.length === 0
+          ? "\n<i>Просмотры за день появятся, когда наберётся два ежедневных замера.</i>"
+          : "";
+      await sendPhoto(png, `📈 Динамика за 14 дней · ${escapeHtml(acc.label)}${note}`);
       chart = `отправлен (просмотры: ${viewsSeries.length} дн., заходы: ${clicksSeries.length} дн.)`;
     }
   } catch (e) {
@@ -154,15 +160,22 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
+  // ?only=<ключ аккаунта> — ручной прогон по одному аккаунту: без дедупликации и без
+  // общих сводок, чтобы проверка не съедала дневной запуск и не дублировала клики.
+  // Разбор параметров держим ДО общего catch: опечатка в адресе ручного запроса —
+  // это ошибка того, кто его набрал, и тревожить ею чат команды незачем.
+  const only = req.nextUrl.searchParams.get("only");
+  let accounts;
   try {
-    // ?only=<ключ аккаунта> — ручной прогон по одному аккаунту: без дедупликации и без
-    // общих сводок, чтобы проверка не съедала дневной запуск и не дублировала клики.
-    const only = req.nextUrl.searchParams.get("only");
-    const accounts = accountsToRun(only);
-    if (accounts.length === 0) {
-      return NextResponse.json({ ok: false, error: "нет настроенных аккаунтов" }, { status: 500 });
-    }
+    accounts = accountsToRun(only);
+  } catch (e) {
+    return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, { status: 400 });
+  }
+  if (accounts.length === 0) {
+    return NextResponse.json({ ok: false, error: "нет настроенных аккаунтов" }, { status: 400 });
+  }
 
+  try {
     // Дедупликация: внешний планировщик и запасной крон Vercel могут сработать
     // в один день оба — второй запуск молча пропускается. ?force=1 — для ручных тестов.
     const force = req.nextUrl.searchParams.get("force") === "1";
