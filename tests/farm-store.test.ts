@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { put, list, del } = vi.hoisted(() => ({ put: vi.fn(), list: vi.fn(), del: vi.fn() }));
 vi.mock("@vercel/blob", () => ({ put, list, del }));
 
-import { isActive, itemPath, loadItem, saveItem } from "../lib/farm/store";
+import { isActive, itemPath, listAllBlobs, listItems, loadItem, saveItem } from "../lib/farm/store";
 import { Item } from "../lib/farm/types";
 
 const item: Item = {
@@ -59,5 +59,76 @@ describe("isActive", () => {
     for (const status of ["rejected", "posted", "failed"] as const) {
       expect(isActive({ ...item, status })).toBe(false);
     }
+  });
+});
+
+describe("listItems: 404 между list() и чтением — честное отсутствие, а не сбой", () => {
+  it("404 на одной задаче не роняет весь список — остальные задачи возвращаются", async () => {
+    list.mockResolvedValue({
+      blobs: [
+        { pathname: itemPath("gone"), url: "https://blob/gone.json" },
+        { pathname: itemPath("i1"), url: "https://blob/i1.json" },
+      ],
+      hasMore: false,
+      cursor: undefined,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        // "gone" уже удалён (уборкой или откатом startBatch) между list() и чтением.
+        if (url.includes("gone")) return new Response("not found", { status: 404 });
+        return new Response(JSON.stringify(item));
+      })
+    );
+
+    const items = await listItems();
+
+    expect(items.map((i) => i.itemId)).toEqual(["i1"]);
+  });
+
+  it("настоящий сбой чтения (не 404) после повтора всё равно роняет listItems", async () => {
+    list.mockResolvedValue({
+      blobs: [{ pathname: itemPath("i1"), url: "https://blob/i1.json" }],
+      hasMore: false,
+      cursor: undefined,
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("upstream error", { status: 503 })));
+
+    await expect(listItems()).rejects.toThrow(/список задач неполон/);
+  });
+});
+
+describe("listAllBlobs: защита от зацикливания по курсору", () => {
+  it("hasMore:true без курсора — не зацикливается, останавливается на первой странице", async () => {
+    list.mockResolvedValue({
+      blobs: [{ pathname: "farm/items/p1.json", url: "https://blob/p1.json" }],
+      hasMore: true,
+      cursor: undefined,
+    });
+
+    const blobs = await listAllBlobs("farm/items/");
+
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(blobs.map((b) => b.pathname)).toEqual(["farm/items/p1.json"]);
+  });
+
+  it("hasMore:true с тем же курсором, что уже был — тоже останавливается, а не читает ту же страницу вечно", async () => {
+    list
+      .mockResolvedValueOnce({
+        blobs: [{ pathname: "farm/items/p1.json", url: "https://blob/p1.json" }],
+        hasMore: true,
+        cursor: "SAME",
+      })
+      .mockResolvedValue({
+        blobs: [{ pathname: "farm/items/p1.json", url: "https://blob/p1.json" }],
+        hasMore: true,
+        cursor: "SAME",
+      });
+
+    const blobs = await listAllBlobs("farm/items/");
+
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(blobs).toHaveLength(2);
   });
 });

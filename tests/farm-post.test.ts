@@ -222,6 +222,48 @@ describe("postOne", () => {
     await expect(postOne(base, deps)).resolves.toBeUndefined();
     expect(deps.saveItem).toHaveBeenLastCalledWith(expect.objectContaining({ status: "posted" }));
   });
+
+  it("временный отказ Graph: первая попытка остаётся queued со сдвинутым вперёд scheduledAt", async () => {
+    const deps = makeDeps({
+      createTrialContainer: vi.fn(async () => {
+        throw new Error("IG контейнер не создан (HTTP 429): (#4) Application request limit reached");
+      }),
+    });
+
+    await postOne(base, deps);
+
+    expect(deps.saveItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: "queued", postAttempts: 1 })
+    );
+    const saved = vi.mocked(deps.saveItem).mock.calls.at(-1)?.[0];
+    expect(Date.parse(saved!.scheduledAt!)).toBeGreaterThan(Date.parse(base.scheduledAt!));
+    expect(deps.notify).not.toHaveBeenCalled();
+  });
+
+  it("пять подряд временных отказов уводят ролик в failed с уведомлением в чат", async () => {
+    // Каждый вызов postOne через loadItem получает задачу с накопленным
+    // postAttempts из предыдущей попытки — так же, как реально ведёт себя
+    // Blob-стор между тиками /api/farm/post.
+    let current: Item = { ...base };
+    const deps = makeDeps({
+      loadItem: vi.fn(async () => ({ ...current })),
+      saveItem: vi.fn(async (saved) => {
+        current = saved;
+      }),
+      createTrialContainer: vi.fn(async () => {
+        throw new Error("IG контейнер не создан (HTTP 429): (#4) Application request limit reached");
+      }),
+    });
+
+    for (let i = 0; i < 5; i += 1) {
+      await postOne(current, deps);
+    }
+
+    expect(current.status).toBe("failed");
+    expect(current.postAttempts).toBe(4);
+    const lastNotify = vi.mocked(deps.notify).mock.calls.at(-1)?.[0] ?? "";
+    expect(lastNotify).toContain("не залился");
+  });
 });
 
 describe("runPostTick", () => {

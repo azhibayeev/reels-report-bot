@@ -50,7 +50,9 @@ describe("startBatch", () => {
   });
 
   it("сорванное создание удаляет уже залитые файлы: иначе они висят в хранилище навсегда", async () => {
-    const deleteBlobQuiet = vi.fn(async () => {});
+    // Сигнатура у мока нужна не для красоты: без неё tsc выводит тип calls как
+    // пустой кортеж и обращение к call[0] становится ошибкой типов.
+    const deleteBlobQuiet = vi.fn(async (_url: string) => {});
     const saveItem = vi.fn(async () => {
       throw new Error("blob down");
     });
@@ -62,7 +64,13 @@ describe("startBatch", () => {
       )
     ).rejects.toThrow(/blob down/);
 
-    expect(deleteBlobQuiet).toHaveBeenCalledTimes(2);
+    // Три удаления, а не два: кроме двух исходников сносится и запись пачки.
+    // Иначе после сорванного создания остаётся batch без задач, а /reels
+    // продолжает пинать его на рендер.
+    const deleted = deleteBlobQuiet.mock.calls.map((call) => call[0]);
+    expect(deleted).toHaveLength(3);
+    expect(deleted).toContain("farm/batches/id.json");
+    for (const file of files) expect(deleted).toContain(file.url);
   });
 
   it("без явной позиции задачи и пачка получают дефолт top", async () => {

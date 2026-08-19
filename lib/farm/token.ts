@@ -51,15 +51,38 @@ export async function checkToken(token: string): Promise<{
     `${G}/debug_token?input_token=${encodeURIComponent(token)}&access_token=${encodeURIComponent(token)}`,
     { cache: "no-store" }
   );
-  if (!res.ok) return { valid: false, expiresAt: null, scopes: [] };
+  if (!res.ok) {
+    const text = await res.text();
+    let parsedError: { message?: string; type?: string; code?: number } | undefined;
+    try {
+      parsedError = (JSON.parse(text) as { error?: typeof parsedError }).error;
+    } catch {
+      parsedError = undefined;
+    }
+    // type === "OAuthException" — НЕ маркер отозванного токена: под ним Graph
+    // прячет и «Application request limit reached» (#4), и #17/#32/#341/#613 —
+    // упор в лимит запросов, а не вердикт про сам токен. Отзыв/протухание
+    // различимы только по конкретному коду: 190 (истёк/отозван), 102 (сессия
+    // недействительна), 463/467 (просроченный/недействительный OAuth-токен).
+    // Всё остальное (включая 400+OAuthException с кодом 4/17/32/341/613, 5xx,
+    // левый JSON, сетевой обрыв) ничего не говорит о токене — бросаем, чтобы
+    // runDaily сказал «не смог проверить», а не выдал лимит за отзыв.
+    if (res.status === 400 && [190, 102, 463, 467].includes(parsedError?.code ?? -1)) {
+      return { valid: false, expiresAt: null, scopes: [] };
+    }
+    throw new Error(`Graph не ответил про токен: ${parsedError?.message || text}`);
+  }
   const { data } = (await res.json()) as {
     data?: { is_valid?: boolean; expires_at?: number; scopes?: string[] };
   };
+  if (data?.is_valid === undefined) {
+    throw new Error("Graph не вернул разбираемый вердикт про токен (нет data.is_valid)");
+  }
   // expires_at = 0 у бессрочных токенов: это не «истёк вчера», а «не истекает».
-  const expires = data?.expires_at;
+  const expires = data.expires_at;
   return {
-    valid: Boolean(data?.is_valid),
+    valid: Boolean(data.is_valid),
     expiresAt: expires ? expires * 1000 : null,
-    scopes: data?.scopes ?? [],
+    scopes: data.scopes ?? [],
   };
 }

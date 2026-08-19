@@ -29,9 +29,7 @@ export async function loadDefaultPosition(): Promise<HookPosition> {
     if (!res.ok) return DEFAULT_POSITION;
 
     const data = (await res.json()) as { position?: unknown };
-    const position = data.position;
-    return position;
-    return DEFAULT_POSITION;
+    return isHookPosition(data.position) ? data.position : DEFAULT_POSITION;
   } catch {
     return DEFAULT_POSITION;
   }

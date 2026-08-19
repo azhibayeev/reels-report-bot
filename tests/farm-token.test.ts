@@ -58,4 +58,35 @@ describe("checkToken", () => {
     expect(info.valid).toBe(true);
     expect(info.expiresAt).toBeNull();
   });
+
+  it("упор в лимит запросов (400 + OAuthException + code 4) — не вердикт про токен, бросает", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: { message: "(#4) Application request limit reached", type: "OAuthException", code: 4 },
+            }),
+            { status: 400 }
+          )
+      )
+    );
+    await expect(checkToken("T")).rejects.toThrow(/Application request limit reached/);
+  });
+
+  it("код 190 (сессия истекла) — это про сам токен, valid:false", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ error: { message: "Session has expired", type: "OAuthException", code: 190 } }),
+            { status: 400 }
+          )
+      )
+    );
+    const info = await checkToken("T");
+    expect(info.valid).toBe(false);
+  });
 });

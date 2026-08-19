@@ -209,6 +209,74 @@ describe("formatQueue", () => {
     // Число где-то в тексте должно отражать два незавершённых.
     expect(text).toMatch(/2/);
   });
+
+  it("ролик, упавший на заливке в IG (videoUrl уже есть), идёт в «Не залились», а не в «Не собрались»", () => {
+    const items = [
+      {
+        ...base,
+        itemId: "i1",
+        status: "failed" as const,
+        index: 7,
+        total: 30,
+        videoUrl: "https://blob/out.mp4",
+        scheduledAt: "2026-08-19T00:30:00.000Z",
+        error: "IG не опубликовал ролик: (#100) The parameter creation_id is required",
+      },
+    ];
+    const text = formatQueue(items, NOW);
+    expect(text).toContain("Не залились");
+    expect(text).toContain("7/30");
+    expect(text).toContain("IG не опубликовал ролик");
+    // Ролик собрался — блока про несобранные ролики тут вообще быть не должно.
+    expect(text).not.toContain("Не собрались");
+  });
+
+  it("упавший на сборке (videoUrl ещё нет) остаётся в «Не собрались», а не в «Не залились»", () => {
+    const items = [
+      { ...base, itemId: "i1", status: "failed" as const, index: 3, total: 10, error: "ffmpeg сломался" },
+    ];
+    const text = formatQueue(items, NOW);
+    expect(text).toContain("Не собрались");
+    expect(text).not.toContain("Не залились");
+  });
+
+  it("одновременно есть и несобравшиеся, и незалившиеся — оба блока со своими роликами", () => {
+    const items = [
+      { ...base, itemId: "i1", status: "failed" as const, index: 3, total: 10, error: "ffmpeg сломался" },
+      {
+        ...base,
+        itemId: "i2",
+        status: "failed" as const,
+        index: 7,
+        total: 30,
+        videoUrl: "https://blob/out.mp4",
+        error: "IG не опубликовал ролик: (#100) The parameter creation_id is required",
+      },
+    ];
+    const text = formatQueue(items, NOW);
+    expect(text).toContain("Не собрались");
+    expect(text).toContain("3/10");
+    expect(text).toContain("Не залились");
+    expect(text).toContain("7/30");
+  });
+
+  it("обрезка не рвёт HTML-сущность посреди &amp;: десять failed с длинной серией & укладываются в лимит и не оканчиваются оборванной сущностью", () => {
+    // Каждый '&' проходит через escapeHtml в "&amp;" — обрубить срез можно
+    // ровно на границе "&am", это и есть воспроизведение бага.
+    const items = Array.from({ length: 10 }, (_, i) => ({
+      ...base,
+      itemId: `f${i}`,
+      index: i + 1,
+      status: "failed" as const,
+      error: "&".repeat(200),
+    }));
+
+    const text = formatQueue(items, NOW);
+
+    expect(text.length).toBeLessThanOrEqual(4096);
+    const withoutNote = text.replace(/\n\n…сводка обрезана, влезло не всё$/, "");
+    expect(withoutNote).not.toMatch(/&[a-zA-Z#0-9]*$/);
+  });
 });
 
 describe("batchesToKick", () => {

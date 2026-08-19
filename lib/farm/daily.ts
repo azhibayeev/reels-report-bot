@@ -1,10 +1,9 @@
-import { list } from "@vercel/blob";
 import { escapeHtml } from "../format";
 import { sendMessage } from "../telegram";
 import { checkToken } from "./token";
 import { livePostTickDeps, runPostTick } from "./post";
-import { deleteBlobQuiet, isActive, itemPath, listItems, saveItem, SOURCES_PREFIX } from "./store";
-import { requireEnv } from "./tick";
+import { deleteBlobQuiet, isActive, itemPath, listAllBlobs, listItems, saveItem, SOURCES_PREFIX } from "./store";
+import { requireEnv, TAKEOVER_MS, triggerRender as triggerRenderChain } from "./tick";
 import { Item } from "./types";
 
 export const PURGE_AFTER_MS = 3 * 86_400_000;
@@ -52,6 +51,10 @@ export interface DailyDeps {
   checkToken: () => Promise<{ valid: boolean; expiresAt: number | null; scopes: string[] }>;
   catchUpDue: () => Promise<number>;
   notify: (text: string, threadId: number | null) => Promise<void>;
+  // Необязательная: обязательное поле сломало бы литералы deps в уже зелёных
+  // тестах. Без неё "оживление" зависшего pending просто не пинает цепочку —
+  // задача вернётся к жизни только следующим /reels или ручным батчем.
+  triggerRender?: (batchId: string) => Promise<void>;
 }
 
 async function notifyQuiet(deps: DailyDeps, text: string, threadId: number | null): Promise<void> {
@@ -64,9 +67,19 @@ async function notifyQuiet(deps: DailyDeps, text: string, threadId: number | nul
 
 export async function runDaily(
   deps: DailyDeps
-): Promise<{ purged: number; expired: number; unstuck: number; caughtUp: number }> {
+): Promise<{ purged: number; expired: number; unstuck: number; caughtUp: number; revived: number }> {
   const nowMs = deps.now();
-  const items = await deps.listItems();
+  let items: Item[];
+  try {
+    items = await deps.listItems();
+  } catch (error) {
+    // Неполный список хуже, чем никакой уборки: purge/expire/unstick по такому
+    // списку снесли бы подложку живой задачи, которую listItems не смог прочитать
+    // (см. lib/farm/store.ts) и молча выкинул бы в "сироты".
+    console.error("farm daily: listItems failed, skipping cleanup", error);
+    await notifyQuiet(deps, "Не смог прочитать список задач фермы — уборка сегодня пропущена", null);
+    return { purged: 0, expired: 0, unstuck: 0, caughtUp: 0, revived: 0 };
+  }
   const { purge, expire, unstick } = classifyForCleanup(items, nowMs);
 
   let purged = 0;
@@ -88,11 +101,20 @@ export async function runDaily(
   for (const item of expire) {
     try {
       await deps.saveItem({ ...item, status: "rejected" });
-      if (item.videoUrl) await deps.deleteBlobQuiet(item.videoUrl);
-      expired += 1;
-      expiredItems.push(item);
     } catch (error) {
       console.error("farm daily expire failed", item.itemId, error);
+      continue;
+    }
+    // saveItem прошёл — задача уже rejected, отступать некуда: expired и
+    // уведомление считаем свершившимся фактом независимо от судьбы видео.
+    expired += 1;
+    expiredItems.push(item);
+    if (item.videoUrl) {
+      try {
+        await deps.deleteBlobQuiet(item.videoUrl);
+      } catch (error) {
+        console.error("farm daily expire: video delete failed", item.itemId, error);
+      }
     }
   }
   if (expiredItems.length > 0) {
@@ -127,6 +149,82 @@ export async function runDaily(
       console.error("farm daily unstick failed", item.itemId, error);
     }
   }
+
+  // Четвёртая корзина — "оживление": classifyForCleanup pending намеренно не
+  // видит (ролик мог быть только что создан, ему рано мешать), но если цепочка
+  // рендера умерла посреди пачки (например, /api/farm/render так и не был
+  // вызван из-за сбоя triggerRender), pending-задача виснет там навсегда —
+  // ни одна из трёх корзин выше её не подхватывает.
+  //
+  // Сами по себе 30 минут в pending ничего не доказывают: в пачке из 30
+  // роликов при ITEM_RESERVE_MS = 150 с на штуку хвост честно висит в pending
+  // больше часа, пока цепочка рендерит предыдущие. Поэтому прежде чем считать
+  // ролик потерянным, исключаем пачки, где рендер всё ещё жив (моложе
+  // TAKEOVER_MS — тот же порог, которым tick.ts отличает живой рендер от
+  // брошенного) — иначе суточный крон дёрнет второй triggerRender параллельно
+  // с идущим и разошлёт человеку тревогу про ролики, с которыми всё в порядке.
+  const liveBatches = new Set(
+    items
+      .filter((i) => i.status === "rendering" && ageMs(i.renderingAt ?? i.createdAt, nowMs) <= TAKEOVER_MS)
+      .map((i) => i.batchId)
+  );
+  const revive = items.filter(
+    (i) => i.status === "pending" && ageMs(i.createdAt, nowMs) > STUCK_AFTER_MS && !liveBatches.has(i.batchId)
+  );
+  let revived = 0;
+  const kickedBatches = new Set<string>();
+  // Сообщения копим и шлём одним пакетом на тему, как и expiredItems выше:
+  // умершая цепочка — это пачка до 50 pending, sendMessage на каждый упёрся бы
+  // в лимит Telegram (~20 сообщений в минуту на группу).
+  const revivedItems: Item[] = [];
+  const lostItems: Item[] = [];
+  for (const item of revive) {
+    try {
+      if (ageMs(item.createdAt, nowMs) > REVIEW_EXPIRY_MS) {
+        // Цепочка мертва неделю и больше — исходника, скорее всего, уже нет
+        // (его снесла бы orphan-уборка), повторный рендер бессмыслен.
+        await deps.saveItem({
+          ...item,
+          status: "failed",
+          error: "цепочка сборки так и не дошла до этого ролика",
+        });
+        lostItems.push(item);
+      } else {
+        await deps.saveItem({ ...item, status: "pending", renderingAt: null });
+        // Один пинок на пачку: несколько потерянных pending одной пачки не
+        // должны запускать столько же параллельных цепочек рендера.
+        if (deps.triggerRender && !kickedBatches.has(item.batchId)) {
+          kickedBatches.add(item.batchId);
+          await deps.triggerRender(item.batchId);
+        }
+        revivedItems.push(item);
+      }
+      revived += 1;
+    } catch (error) {
+      console.error("farm daily revive failed", item.itemId, error);
+    }
+  }
+  const notifyGrouped = async (targets: Item[], textFor: (numbers: string) => string) => {
+    if (targets.length === 0) return;
+    const byThread = new Map<number | null, Item[]>();
+    for (const item of targets) {
+      const group = byThread.get(item.threadId);
+      if (group) group.push(item);
+      else byThread.set(item.threadId, [item]);
+    }
+    for (const [threadId, group] of byThread) {
+      const numbers = group.map((i) => `${i.index}/${i.total}`).join(", ");
+      await notifyQuiet(deps, textFor(numbers), threadId);
+    }
+  };
+  await notifyGrouped(
+    revivedItems,
+    (numbers) => `Ролики ${numbers} зависли в очереди на сборку — цепочка перезапущена`
+  );
+  await notifyGrouped(
+    lostItems,
+    (numbers) => `Ролики ${numbers} потеряны: цепочка сборки так и не дошла до них за неделю`
+  );
 
   try {
     const sources = await deps.listSources();
@@ -171,7 +269,7 @@ export async function runDaily(
     }
   }
 
-  return { purged, expired, unstuck, caughtUp };
+  return { purged, expired, unstuck, caughtUp, revived };
 }
 
 export function liveDailyDeps(): DailyDeps {
@@ -182,9 +280,10 @@ export function liveDailyDeps(): DailyDeps {
     deleteBlobQuiet,
     deleteItemRecord: (id) => deleteBlobQuiet(itemPath(id)),
     listSources: async () => {
-      const { blobs } = await list({ prefix: SOURCES_PREFIX });
+      const blobs = await listAllBlobs(SOURCES_PREFIX);
       return blobs.map((b) => ({ url: b.url, uploadedAt: b.uploadedAt }));
     },
+    triggerRender: triggerRenderChain,
     checkToken: () => checkToken(requireEnv("FARM_IG_TOKEN")),
     // Основной путь — внешний таймер по каждому слоту; суточный крон только
     // страхует его отказ. Один цикл публикации упирается в 240-секундный потолок

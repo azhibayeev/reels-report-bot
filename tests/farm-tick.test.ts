@@ -139,6 +139,47 @@ describe("runRenderTick", () => {
     expect(deps.triggerRender).toHaveBeenCalledWith("b1");
   });
 
+  it("сбой saveItem при отметке rendering: notify зван, triggerRender НЕ зван — иначе бесконечный самовызов", async () => {
+    const item = { ...base, itemId: "i1" };
+    const { deps } = makeDeps([item], {
+      saveItem: vi.fn(async () => {
+        throw new Error("Blob 429");
+      }),
+    });
+
+    await runRenderTick("b1", deps);
+
+    expect(deps.notify).toHaveBeenCalledWith(expect.stringContaining("Не смог отметить"), item.threadId);
+    expect(deps.triggerRender).not.toHaveBeenCalled();
+  });
+
+  it("сбой listItems: тик не бросает, шлёт одно уведомление, triggerRender НЕ зван", async () => {
+    const { deps } = makeDeps([], {
+      listItems: vi.fn(async () => {
+        throw new Error("Blob list down");
+      }),
+    });
+
+    await expect(runRenderTick("b1", deps)).resolves.toBeUndefined();
+
+    expect(deps.notify).toHaveBeenCalledTimes(1);
+    expect(deps.triggerRender).not.toHaveBeenCalled();
+  });
+
+  it("сбой listItems и упавший notify: тик всё равно не бросает", async () => {
+    const { deps } = makeDeps([], {
+      listItems: vi.fn(async () => {
+        throw new Error("Blob list down");
+      }),
+      notify: vi.fn(async () => {
+        throw new Error("telegram тоже лежит");
+      }),
+    });
+
+    await expect(runRenderTick("b1", deps)).resolves.toBeUndefined();
+    expect(deps.triggerRender).not.toHaveBeenCalled();
+  });
+
   it("упавший рендер и упавший notify на двух роликах: цикл не рвётся, обе задачи failed", async () => {
     const item1 = { ...base, itemId: "i1", index: 1 };
     const item2 = { ...base, itemId: "i2", index: 2 };

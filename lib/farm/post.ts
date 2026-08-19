@@ -28,12 +28,79 @@ export function pickDue(items: Item[], nowMs: number): Item | null {
   // Брошенный `posting` (postingAt старше TAKEOVER_MS) в работу НЕ возвращается сознательно:
   // вызов мог умереть уже после media_publish, и повторная заливка дала бы дубль рилса
   // на аккаунте. Такие задачи разбирает суточная уборка.
-  return due.sort((a, b) => Date.parse(b.scheduledAt!) - Date.parse(a.scheduledAt!))[0] ?? null;
+  return due.sort((a, b) => Date.parse(a.scheduledAt!) - Date.parse(b.scheduledAt!))[0] ?? null;
 }
 
+// Временный отказ Graph (лимит запросов, 5xx, обрыв сети) не должен стоить
+// ролику слота — в отличие от постоянного (битые параметры, отозванные права),
+// после которого повтор бессмыслен. Список опознаётся по тексту ошибки: живые
+// коды из практики ((#4), #17) плюс общие маркеры лимита и HTTP-статусы,
+// которые instagram.ts теперь пишет в сообщение явно.
+const TRANSIENT_PUBLISH_ERROR_PATTERNS: RegExp[] = [
+  /\(#4\)/,
+  /#17\b/,
+  /application request limit/i,
+  /rate limit/i,
+  /too many requests/i,
+  // Только HTTP-статус, а не голое число: instagram.ts всегда пишет его как
+  // "HTTP 429"/"HTTP 5xx" — без этого /\b429\b/ и /\b5\d\d\b/ ловили бы любое
+  // трёхзначное число в тексте ошибки Graph (id, код, что угодно).
+  /HTTP 429/,
+  /HTTP 5\d\d/,
+  /fetch failed/i,
+  /econnreset/i,
+  /etimedout/i,
+  /enotfound/i,
+];
+
+// Сдвиг слота ретраем — размен, оправданный только пока Graph ещё может
+// передумать. "IG отбраковал ролик (ERROR/EXPIRED)" — это окончательный
+// вердикт про сам ролик (битый файл, протухший upload-сессия), а не про
+// нагрузку на API: повтор с фиксом C иначе стоил бы до пяти бесполезных
+// попыток и лишний час занятого слота.
+function isTransientPublishError(message: string): boolean {
+  if (/IG отбраковал ролик \((ERROR|EXPIRED)\)/.test(message)) return false;
+  return TRANSIENT_PUBLISH_ERROR_PATTERNS.some((re) => re.test(message));
+}
+
+// Раньше временный отказ оставлял scheduledAt нетронутым — pickDue снова и
+// снова выбирал бы тот же залипший ролик (лимит аккаунта на часы, битый файл
+// с "подходящим" текстом ошибки), и вся очередь за ним голодала бы вечно. Сдвиг
+// вперёд сознательно отдаёт слот следующему queued-ролику: залипший вернётся
+// через TRANSIENT_RETRY_DELAY_MS, а MAX_TRANSIENT_ATTEMPTS не даёт ему
+// ретраиться бесконечно — на последней попытке уходит в failed с уведомлением.
+const TRANSIENT_RETRY_DELAY_MS = 15 * 60_000;
+const MAX_TRANSIENT_ATTEMPTS = 5;
+
+// Мьютекс на itemId в пределах ОДНОГО процесса: закрывает совпадение двух
+// тиков заливки детерминированно, а не вероятностно (см. п.1 в описании
+// задачи). В Map кладём СИНХРОННО, до первого await — иначе конкурентный
+// вызов для того же itemId не увидит цепочку и стартует параллельно с первым,
+// и оба успеют прочитать "queued" до того, как кто-то из них запишет "posting".
+const postLocks = new Map<string, Promise<void>>();
+
 export async function postOne(item: Item, deps: PostDeps): Promise<void> {
+  const previous = postLocks.get(item.itemId) ?? Promise.resolve();
+  let settle!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+  postLocks.set(item.itemId, gate);
+  await previous;
+  try {
+    await postOneLocked(item, deps);
+  } finally {
+    settle();
+    // Чистим запись, только если за время нашей работы её не перезаписал
+    // следующий конкурентный вызов — иначе стёрли бы чужой, ещё не готовый gate.
+    if (postLocks.get(item.itemId) === gate) postLocks.delete(item.itemId);
+  }
+}
+
+async function postOneLocked(item: Item, deps: PostDeps): Promise<void> {
   // В Blob нет compare-and-set, без перечитывания два тика таймера залили бы
-  // один ролик дважды.
+  // один ролик дважды. Мьютекс выше закрывает это внутри процесса; здесь —
+  // подстраховка на случай, если loadItem всё же увидел чужую более свежую запись.
   const fresh = await deps.loadItem(item.itemId);
   if (!fresh || fresh.status !== "queued") return;
 
@@ -71,7 +138,43 @@ export async function postOne(item: Item, deps: PostDeps): Promise<void> {
   try {
     const containerId = await deps.createTrialContainer(fresh.videoUrl, fresh.caption);
     await deps.waitForContainer(containerId);
+
+    // Перечитываем прямо перед публикацией: мьютекс выше закрывает совпадение
+    // только внутри процесса, а compare-and-set в Blob нет вовсе — за время
+    // createTrialContainer + waitForContainer другой инстанс (второй тик
+    // /api/farm/post, суточный добор) мог успеть пройти весь цикл сам и уже
+    // опубликовать этот же ролик. "queued"/"posting" тут не повод останавливаться —
+    // это либо ожидаемое (мы сами так и не увидели своей же записи), либо ещё
+    // не финишировавшая параллельная попытка; тревожен только чужой "posted".
+    const beforePublish = await deps.loadItem(fresh.itemId);
+    if (beforePublish?.status === "posted") {
+      console.error(
+        "farm postOne: другой инстанс уже опубликовал этот ролик, publishContainer не вызван",
+        fresh.itemId,
+        beforePublish.igMediaId
+      );
+      return;
+    }
+
     mediaId = await deps.publishContainer(containerId);
+
+    // И после публикации — тем же способом: наша publishContainer могла
+    // выполниться параллельно с чужой (то самое узкое межинстансное окно,
+    // которое эта проверка лишь сужает, а не закрывает — compare-and-set нет).
+    // Если кто-то уже успел сохранить "posted" с ДРУГИМ igMediaId, на аккаунте
+    // дубль — молчать об этом нельзя.
+    const afterPublish = await deps.loadItem(fresh.itemId);
+    if (afterPublish?.status === "posted" && afterPublish.igMediaId && afterPublish.igMediaId !== mediaId) {
+      console.error(
+        "farm postOne: дубль на аккаунте — оба инстанса опубликовали один ролик",
+        fresh.itemId,
+        { ours: mediaId, theirs: afterPublish.igMediaId }
+      );
+      await notifyQuiet(
+        `Внимание: ролик ${fresh.index}/${fresh.total} мог опубликоваться на аккаунте дважды — проверьте ленту`
+      );
+    }
+
     // Пишем igMediaId сразу, ДО запроса ссылки: рилс уже опубликован на аккаунте,
     // а fetchPermalink — это лишний round-trip к Graph API без таймаута. Если вызов
     // убьют во время этого запроса, id опубликованного медиа не должен потеряться.
@@ -102,6 +205,33 @@ export async function postOne(item: Item, deps: PostDeps): Promise<void> {
         console.error("farm post: сбой после сохранения permalink", fresh.itemId, message);
       }
       await deleteVideoQuiet();
+      return;
+    }
+    if (isTransientPublishError(message)) {
+      // Временный отказ ДО публикации (429/5xx/сеть) — ролик уже одобрен
+      // человеком, терять слот из-за пятиминутного лимита Graph нельзя, но и
+      // держать им всю очередь навечно тоже нельзя (см. TRANSIENT_RETRY_DELAY_MS).
+      const attempts = (fresh.postAttempts ?? 0) + 1;
+      if (attempts >= MAX_TRANSIENT_ATTEMPTS) {
+        console.error(
+          "farm postOne: временный отказ Graph, попытки исчерпаны, ролик в failed",
+          fresh.itemId,
+          attempts,
+          message
+        );
+        await deps.saveItem({ ...fresh, status: "failed", postingAt: null, error: message });
+        await notifyQuiet(`Ролик ${fresh.index}/${fresh.total} не залился: ${message}`);
+        return;
+      }
+      console.error("farm postOne: временный отказ Graph, ролик возвращён в очередь", fresh.itemId, attempts, message);
+      await deps.saveItem({
+        ...fresh,
+        status: "queued",
+        postingAt: null,
+        error: message,
+        postAttempts: attempts,
+        scheduledAt: new Date(deps.now() + TRANSIENT_RETRY_DELAY_MS).toISOString(),
+      });
       return;
     }
     await deps.saveItem({ ...fresh, status: "failed", postingAt: null, error: message });

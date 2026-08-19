@@ -84,13 +84,34 @@ export function formatSlot(iso: string, tz: string = "Asia/Jakarta"): string {
 // превратила бы /reels в портянку и рисковала бы упереться в лимит Telegram.
 const MAX_FAILED_IN_QUEUE = 10;
 
+// Реальная ошибка ffmpeg — это "ffmpeg вышел с кодом 1: <хвост stderr 600 знаков>"
+// (lib/farm/render.ts); MAX_FAILED_IN_QUEUE ограничивает число строк, но не их
+// длину — уже 7 таких строк перерастают лимит sendMessage. Обрезаем текст
+// каждой ошибки задолго до этого предела.
+const MAX_ERROR_CHARS = 160;
+
+// Жёсткий потолок sendMessage в Telegram Bot API — выше него запрос вернёт 400,
+// и /reels не ответит вообще.
+export const TELEGRAM_TEXT_LIMIT = 4096;
+// Запас под маркер обрезки, добавляемый в хвост, если всё равно не влезли.
+const TRUNCATION_NOTE = "\n\n…сводка обрезана, влезло не всё";
+
+function truncateError(error: string): string {
+  if (error.length <= MAX_ERROR_CHARS) return error;
+  return `${error.slice(0, MAX_ERROR_CHARS)}…`;
+}
+
 export function formatQueue(items: Item[], nowMs: number): string {
   if (items.length === 0) return "Ферма пуста: ни одного ролика ещё не загружено.";
 
   const review = items.filter((i) => i.status === "review");
   const queued = items.filter((i) => i.status === "queued");
   const rendering = items.filter((i) => i.status === "pending" || i.status === "rendering");
-  const failed = items.filter((i) => i.status === "failed");
+  // Рендер и заливка в IG — разные стадии с разными виновниками: ffmpeg vs Graph API.
+  // videoUrl появляется только после успешной сборки (см. lib/farm/render.ts), поэтому
+  // по нему и различаем — упал ли ролик, ещё не собравшись, или уже собранный на публикации.
+  const failedRendering = items.filter((i) => i.status === "failed" && i.videoUrl === null);
+  const failedPosting = items.filter((i) => i.status === "failed" && i.videoUrl !== null);
 
   const lines: string[] = ["🎬 <b>Ферма</b>"];
   lines.push(`ждут апрува: ${review.length}`);
@@ -102,16 +123,38 @@ export function formatQueue(items: Item[], nowMs: number): string {
     .sort((a, b) => Date.parse(a.scheduledAt!) - Date.parse(b.scheduledAt!))[0];
   if (nextQueued) lines.push(`ближайший слот: ${formatSlot(nextQueued.scheduledAt!)}`);
 
-  if (failed.length > 0) {
+  const pushFailedBlock = (title: string, list: Item[]) => {
+    if (list.length === 0) return;
     lines.push("");
-    lines.push("⚠️ Не собрались:");
-    for (const item of failed.slice(0, MAX_FAILED_IN_QUEUE)) {
-      lines.push(`${item.index}/${item.total} — ${escapeHtml(item.error ?? "без деталей")}`);
+    lines.push(title);
+    for (const item of list.slice(0, MAX_FAILED_IN_QUEUE)) {
+      lines.push(`${item.index}/${item.total} — ${escapeHtml(truncateError(item.error ?? "без деталей"))}`);
     }
-    if (failed.length > MAX_FAILED_IN_QUEUE) {
-      lines.push(`…и ещё ${failed.length - MAX_FAILED_IN_QUEUE}`);
+    if (list.length > MAX_FAILED_IN_QUEUE) {
+      lines.push(`…и ещё ${list.length - MAX_FAILED_IN_QUEUE}`);
     }
-  }
+  };
+  pushFailedBlock("⚠️ Не собрались:", failedRendering);
+  pushFailedBlock("⚠️ Не залились:", failedPosting);
 
-  return lines.join("\n");
+  const text = lines.join("\n");
+  if (text.length <= TELEGRAM_TEXT_LIMIT) return text;
+  // Обрезка ошибок и MAX_FAILED_IN_QUEUE должны были уложиться сами — этот
+  // потолок только страхует край случая (много блоков, длинные позиции и т.п.),
+  // чтобы sendMessage не получил 400 и /reels ответил хоть чем-то.
+  return `${safeTruncate(text, TELEGRAM_TEXT_LIMIT - TRUNCATION_NOTE.length)}${TRUNCATION_NOTE}`;
+}
+
+// Голый slice(0, room) режет по числу знаков и не знает, что текст уже прошёл
+// через escapeHtml — срез легко приходится внутрь "&amp;"/"&lt;", Telegram
+// с parse_mode=HTML отвечает 400 "can't parse entities", и /reels не отвечает
+// вообще. Сначала режем по последнему переводу строки (чтобы не рвать строку
+// посередине), затем срубаем недописанную в самом хвосте HTML-сущность.
+function safeTruncate(text: string, room: number): string {
+  let cut = text.slice(0, room);
+  const lastNewline = cut.lastIndexOf("\n");
+  // Если перевод строки слишком близко к началу, резать по нему бессмысленно —
+  // получим почти пустую сводку вместо страховки от оборванной сущности.
+  if (lastNewline > room / 2) cut = cut.slice(0, lastNewline);
+  return cut.replace(/&[a-zA-Z#0-9]*$/, "");
 }

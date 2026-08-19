@@ -286,6 +286,19 @@ export async function POST(req: NextRequest) {
       if (handled) return NextResponse.json({ ok: true });
     } catch (e) {
       console.error("farm edit reply failed:", e);
+      // handleEditReply уже сохранил новое описание и status: "review" до
+      // попытки переотправить карточку (см. lib/farm/approve.ts) — раз она
+      // упала, ролик остался без карточки в чате, а повторный ответ на старый
+      // промпт его больше не найдёт (editPromptId обнулён). Молчать нельзя:
+      // человек должен узнать, что текст цел, а кнопки апрува пропали.
+      try {
+        await sendMessage(
+          escapeHtml(`Новое описание сохранено, но карточку переотправить не удалось: ${(e as Error).message}. Ролик остался ждать апрува без карточки.`),
+          { thread: msg.message_thread_id ?? null }
+        );
+      } catch (notifyError) {
+        console.error("farm edit reply notify failed:", notifyError);
+      }
       // Не прерываем обработку — провалимся к разбору обычных команд ниже.
     }
   }

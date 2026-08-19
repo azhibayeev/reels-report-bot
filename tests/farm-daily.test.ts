@@ -286,6 +286,54 @@ describe("runDaily", () => {
     expect(result.caughtUp).toBe(1);
   });
 
+  it("пачка с живым rendering: зависший pending той же пачки не оживляется, triggerRender не зовётся", async () => {
+    const live = {
+      ...base,
+      itemId: "live",
+      batchId: "b1",
+      status: "rendering" as const,
+      renderingAt: new Date(NOW - 60_000).toISOString(),
+    };
+    const stuckPending = {
+      ...base,
+      itemId: "waiting",
+      batchId: "b1",
+      status: "pending" as const,
+      createdAt: new Date(NOW - 40 * 60_000).toISOString(),
+    };
+    const triggerRender = vi.fn(async () => {});
+    const deps = makeDailyDeps({ listItems: async () => [live, stuckPending], triggerRender });
+
+    const result = await runDaily(deps);
+
+    expect(result.revived).toBe(0);
+    expect(triggerRender).not.toHaveBeenCalled();
+    expect(deps.saveItem).not.toHaveBeenCalledWith(expect.objectContaining({ itemId: "waiting" }));
+  });
+
+  it("оживление шлёт одно сообщение со списком номеров на пачку потерянных, а не сообщение на каждый ролик", async () => {
+    const lost = Array.from({ length: 5 }, (_, i) => ({
+      ...base,
+      itemId: `p${i}`,
+      batchId: "b1",
+      index: i + 1,
+      total: 5,
+      status: "pending" as const,
+      // Старше REVIEW_EXPIRY_MS — уходят в failed как окончательно потерянные.
+      createdAt: new Date(NOW - REVIEW_EXPIRY_MS - 1000).toISOString(),
+    }));
+    const deps = makeDailyDeps({ listItems: async () => lost });
+
+    const result = await runDaily(deps);
+
+    expect(result.revived).toBe(5);
+    const lostCalls = vi.mocked(deps.notify).mock.calls.filter(([text]) => text.includes("потеряны"));
+    expect(lostCalls).toHaveLength(1);
+    for (let i = 1; i <= 5; i++) {
+      expect(lostCalls[0][0]).toContain(`${i}/5`);
+    }
+  });
+
   it("падение одного шага (удаление осиротевшего) не обрывает остальную уборку", async () => {
     const old = { ...base, itemId: "old", status: "posted" as const, createdAt: new Date(NOW - PURGE_AFTER_MS - 1).toISOString() };
     const deps = makeDailyDeps({

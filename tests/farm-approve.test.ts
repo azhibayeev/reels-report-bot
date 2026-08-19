@@ -105,6 +105,31 @@ describe("handleCallback", () => {
     expect(deps.deleteBlobQuiet).not.toHaveBeenCalled();
   });
 
+  it("повторный апрув той же задачи внутри замка не выдаёт второй слот", async () => {
+    // Первый loadItem (до withApproveLock) ещё видит review — иначе тест не
+    // дошёл бы до замка вообще. Второй loadItem — уже внутри критической
+    // секции: к этому моменту «параллельный» апрув успел записать queued.
+    // Именно это перечитывание внутри замка и обязана делать критическая
+    // секция, чтобы не выдать слот дважды.
+    let loadCalls = 0;
+    const nextFreeSlot = vi.fn(() => SLOT);
+    const saveItem = vi.fn(async () => {});
+    const { deps } = makeDeps([{ ...base }], {
+      saveItem,
+      nextFreeSlot,
+      loadItem: async () => {
+        loadCalls += 1;
+        return loadCalls === 1 ? { ...base } : { ...base, status: "queued", scheduledAt: SLOT };
+      },
+    });
+
+    await handleCallback({ id: "cb1", data: "a:i1", chatId: -1 }, deps);
+
+    expect(nextFreeSlot).not.toHaveBeenCalled();
+    expect(saveItem).not.toHaveBeenCalled();
+    expect(deps.answerCallback).toHaveBeenCalledWith("cb1", "Уже обработано");
+  });
+
   it("edit: просит новое описание, переводит в editing, снимает кнопки со старой карточки", async () => {
     const { deps, items } = makeDeps([{ ...base }]);
 
