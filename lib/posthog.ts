@@ -87,10 +87,12 @@ export async function getClicksStats(sinceEpoch: number): Promise<ClicksStats> {
 //
 // День спринта = дата (в Джакарте) момента, сдвинутого на +11:30 ч: клики от 12:30 текущего
 // дня до 12:30 следующего попадают в ЗАВЕРШАЮЩИЙ день — как метка у просмотров.
-// WHERE держим на event+timestamp (property-фильтры в WHERE ломают PostHog).
-export async function getDailyClicks(sinceEpoch: number): Promise<DayPoint[]> {
+// WHERE держим на event+timestamp (property-фильтры в WHERE ломают PostHog), поэтому
+// отбор по ссылке конкретного аккаунта (condition) уходит внутрь uniqIf.
+export async function getDailyClicks(sinceEpoch: number, condition?: string | null): Promise<DayPoint[]> {
+  const counter = condition ? `uniqIf(person_id, ${condition})` : "uniq(person_id)";
   const rows = await phQuery(
-    `SELECT toDate(toTimeZone(timestamp, 'Asia/Jakarta') + INTERVAL 690 MINUTE) AS d, uniq(person_id) AS u FROM events ` +
+    `SELECT toDate(toTimeZone(timestamp, 'Asia/Jakarta') + INTERVAL 690 MINUTE) AS d, ${counter} AS u FROM events ` +
       `WHERE event = '$pageview' AND timestamp >= toDateTime(${Math.floor(sinceEpoch)}) ` +
       `GROUP BY d ORDER BY d`
   );

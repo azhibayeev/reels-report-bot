@@ -37,8 +37,7 @@ export function sheetsConfigured(): boolean {
   );
 }
 
-export const reelsTab = (): string => process.env.SHEETS_TAB || "Reels";
-export const historyTab = (): string => process.env.SHEETS_HISTORY_TAB || "History";
+// Имена вкладок зависят от аккаунта и живут в lib/accounts.ts (reelsTabOf/historyTabOf).
 
 export function buildJwtClaim(email: string, nowSec: number): JwtClaim {
   return { iss: email, scope: SCOPE, aud: TOKEN_URL, exp: nowSec + 3600, iat: nowSec };

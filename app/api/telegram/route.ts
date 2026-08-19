@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { AccountConfig, accountUserId, DARISTEPPE, QURANY_APP } from "../../../lib/accounts";
 import { computeReport } from "../../../lib/diff";
 import {
   escapeHtml,
@@ -49,9 +50,11 @@ interface TelegramUpdate {
 
 const HELP =
   "Команды:\n" +
-  "/now — отчёт с 12:30 вчера по текущий момент\n" +
-  "/otchet — таблица (CSV) по всем рилсам с приростом\n" +
-  "/info — общая статистика по всем рилсам\n" +
+  "/now — отчёт с 12:30 вчера по текущий момент (@daristeppe)\n" +
+  "/otchet — таблица (CSV) по всем рилсам с приростом (@daristeppe)\n" +
+  "/info — общая статистика по всем рилсам (@daristeppe)\n" +
+  "/nowapp — отчёт с 12:30 вчера по текущий момент (@qurany_app)\n" +
+  "/infoapp — общая статистика по всем рилсам (@qurany_app)\n" +
   "/kliki — заходы по ссылкам за спринт (с 12:30)\n" +
   "/klikitotal — заходы по ссылкам за всё время\n" +
   "/target — таргет за сутки (реклама + уровни лидов)\n" +
@@ -62,10 +65,9 @@ const HELP =
 
 // Живой замер: список рилсов + актуальные просмотры. Снапшот НЕ сохраняем,
 // чтобы не сдвигать базу ежедневного отчёта.
-async function takeLiveSnapshot(): Promise<Snapshot> {
-  const igUserId = process.env.IG_USER_ID;
-  if (!igUserId) throw new Error("IG_USER_ID is not set");
-  const token = await resolveToken();
+async function takeLiveSnapshot(acc: AccountConfig): Promise<Snapshot> {
+  const igUserId = accountUserId(acc);
+  const token = await resolveToken(acc);
   const media = await fetchAllReels(igUserId, token);
   const views = await fetchViews(token, media.map((m) => m.id));
   const followersCount = await fetchFollowersCount(igUserId, token);
@@ -122,20 +124,23 @@ async function handleReportCommand(cmd: string, opts: SendOptions): Promise<void
     await sendMessage(formatTargetMessage(ads, levels, "за всё время", "За всё время"), opts);
     return;
   }
-  if (cmd === "/info") {
-    await sendMessage(formatInfoMessage(await takeLiveSnapshot()), opts);
+  // Пары команд: базовая — по @daristeppe, с суффиксом app — по @qurany_app.
+  if (cmd === "/info" || cmd === "/infoapp") {
+    const acc = cmd === "/infoapp" ? QURANY_APP : DARISTEPPE;
+    await sendMessage(formatInfoMessage(await takeLiveSnapshot(acc), acc.label), opts);
     return;
   }
-  if (cmd === "/now") {
-    const current = await takeLiveSnapshot();
-    const prev = await loadPreviousSnapshot(jakartaDateKey(new Date()));
-    await sendMessage(formatNowMessage(computeReport(current, prev)), opts);
+  if (cmd === "/now" || cmd === "/nowapp") {
+    const acc = cmd === "/nowapp" ? QURANY_APP : DARISTEPPE;
+    const current = await takeLiveSnapshot(acc);
+    const prev = await loadPreviousSnapshot(jakartaDateKey(new Date()), acc);
+    await sendMessage(formatNowMessage(computeReport(current, prev), acc.label), opts);
     return;
   }
   if (cmd === "/otchet") {
-    const current = await takeLiveSnapshot();
+    const current = await takeLiveSnapshot(DARISTEPPE);
     const key = jakartaDateKey(new Date());
-    const prev = await loadPreviousSnapshot(key);
+    const prev = await loadPreviousSnapshot(key, DARISTEPPE);
     const report = computeReport(current, prev);
     await sendDocument(
       `reels-${key}.csv`,
@@ -220,9 +225,11 @@ export async function GET(req: NextRequest) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       commands: [
-        { command: "now", description: "Отчёт с 12:30 вчера по сейчас" },
-        { command: "otchet", description: "Таблица (CSV) по всем рилсам" },
-        { command: "info", description: "Общая статистика по всем рилсам" },
+        { command: "now", description: "Отчёт с 12:30 вчера по сейчас (@daristeppe)" },
+        { command: "otchet", description: "Таблица (CSV) по всем рилсам (@daristeppe)" },
+        { command: "info", description: "Общая статистика по всем рилсам (@daristeppe)" },
+        { command: "nowapp", description: "Отчёт с 12:30 вчера по сейчас (@qurany_app)" },
+        { command: "infoapp", description: "Общая статистика по всем рилсам (@qurany_app)" },
         { command: "kliki", description: "Заходы по ссылкам за спринт (с 12:30)" },
         { command: "klikitotal", description: "Заходы по ссылкам за всё время" },
         { command: "target", description: "Таргет за сутки (реклама + уровни лидов)" },
