@@ -18,6 +18,17 @@ function threadId(): string | undefined {
 export interface SendOptions {
   /** Тема форума для ответа: число — конкретная тема, null — General, undefined — тема из env. */
   thread?: number | null;
+  /**
+   * Чат для ответа. Задан — отвечаем туда, откуда пришла команда (это нужно для
+   * лички); не задан — в группу из TELEGRAM_CHAT_ID, как было до появления лички.
+   */
+  chat?: number | string;
+}
+
+// Явный чат из опций важнее умолчания: иначе ответ на команду из лички улетел бы
+// в группу, а человек в личке остался бы без ответа.
+function targetChat(opts?: SendOptions): string {
+  return opts?.chat !== undefined ? String(opts.chat) : chatId();
 }
 
 export async function sendMessage(html: string, opts?: SendOptions): Promise<void> {
@@ -26,7 +37,7 @@ export async function sendMessage(html: string, opts?: SendOptions): Promise<voi
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      chat_id: chatId(),
+      chat_id: targetChat(opts),
       ...(thread ? { message_thread_id: thread } : {}),
       text: html,
       parse_mode: "HTML",
@@ -45,7 +56,7 @@ export async function sendDocument(
   opts?: SendOptions
 ): Promise<void> {
   const form = new FormData();
-  form.append("chat_id", chatId());
+  form.append("chat_id", targetChat(opts));
   const thread = opts && "thread" in opts ? opts.thread : threadId() ? Number(threadId()) : null;
   if (thread) form.append("message_thread_id", String(thread));
   if (caption) form.append("caption", caption);
@@ -58,7 +69,7 @@ export async function sendDocument(
 
 export async function sendPhoto(png: Buffer, caption?: string, opts?: SendOptions): Promise<void> {
   const form = new FormData();
-  form.append("chat_id", chatId());
+  form.append("chat_id", targetChat(opts));
   const thread = opts && "thread" in opts ? opts.thread : threadId() ? Number(threadId()) : null;
   if (thread) form.append("message_thread_id", String(thread));
   if (caption) {

@@ -38,13 +38,15 @@ interface TelegramUpdate {
   message?: {
     text?: string;
     message_thread_id?: number;
-    chat?: { id?: number | string };
+    chat?: { id?: number | string; type?: string };
+    from?: { id?: number };
     reply_to_message?: { message_id?: number };
   };
   callback_query?: {
     id: string;
     data?: string;
-    message?: { message_id?: number; chat?: { id?: number | string } };
+    from?: { id?: number };
+    message?: { message_id?: number; chat?: { id?: number | string; type?: string } };
   };
 }
 
@@ -92,10 +94,11 @@ async function handleReportCommand(cmd: string, opts: SendOptions): Promise<void
   if (cmd === "/id") {
     // Утилита: узнать id темы форума (выполнить в нужной теме, напр. «Аналитика»).
     const thread = "thread" in opts ? opts.thread : null;
+    const here = String(opts.chat ?? process.env.TELEGRAM_CHAT_ID ?? "");
     await sendMessage(
       thread
-        ? `🧵 message_thread_id этой темы: <code>${thread}</code>\nchat_id: <code>${escapeHtml(process.env.TELEGRAM_CHAT_ID ?? "")}</code>`
-        : `Это General (без темы форума).\nchat_id: <code>${escapeHtml(process.env.TELEGRAM_CHAT_ID ?? "")}</code>`,
+        ? `🧵 message_thread_id этой темы: <code>${thread}</code>\nchat_id: <code>${escapeHtml(here)}</code>`
+        : `Без темы форума (General или личка).\nchat_id: <code>${escapeHtml(here)}</code>`,
       opts
     );
     return;
@@ -157,7 +160,9 @@ async function handleReportCommand(cmd: string, opts: SendOptions): Promise<void
 // потому что /style читает аргумент позиции из текста.
 async function handleFarmCommand(cmd: string, text: string, opts: SendOptions, req: NextRequest): Promise<boolean> {
   if (cmd === "/batch") {
-    const chatId = Number(process.env.TELEGRAM_CHAT_ID);
+    // Чат берём из опций, а не из env: команду можно дать и в личке, и карточки
+    // роликов должны прийти туда же, откуда её отправили.
+    const chatId = Number(opts.chat ?? process.env.TELEGRAM_CHAT_ID);
     const threadId = opts.thread ?? null;
     const token = signBatchToken(chatId, threadId, Date.now() + BATCH_TOKEN_TTL_MS, requireEnv("FARM_TOKEN_SECRET"));
     const explicitBase = process.env.FARM_BASE_URL;
@@ -243,6 +248,38 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ webhook: await webhook.json(), commands: await commands.json() });
 }
 
+// Личку принимаем от тех, кто состоит в рабочей группе: бот открыт по адресу, и
+// без проверки любой нашедший его мог бы заливать пачки и публиковать в наш
+// Instagram. Членство спрашиваем у Telegram, а не ведём список руками — доступ
+// тогда сам следует за составом команды.
+const MEMBER_STATUSES = ["creator", "administrator", "member", "restricted"];
+
+async function isTeamMember(userId: number | undefined): Promise<boolean> {
+  const groupId = process.env.TELEGRAM_CHAT_ID;
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  if (!userId || !groupId || !botToken) return false;
+  try {
+    const res = await fetch(
+      `https://api.telegram.org/bot${botToken}/getChatMember?chat_id=${encodeURIComponent(groupId)}&user_id=${userId}`,
+      { cache: "no-store" }
+    );
+    if (!res.ok) return false;
+    const data = (await res.json()) as { ok?: boolean; result?: { status?: string } };
+    return Boolean(data.ok) && MEMBER_STATUSES.includes(data.result?.status ?? "");
+  } catch (error) {
+    // Сеть отвалилась — молча отказываем: пустить чужого хуже, чем не пустить своего.
+    console.error("getChatMember failed:", error);
+    return false;
+  }
+}
+
+// Групповой чат узнаём по id, личку — по членству отправителя в группе.
+async function isAllowedSource(chat: { id?: number | string; type?: string } | undefined, fromId: number | undefined): Promise<boolean> {
+  if (String(chat?.id ?? "") === process.env.TELEGRAM_CHAT_ID) return true;
+  if (chat?.type !== "private") return false;
+  return isTeamMember(fromId);
+}
+
 export async function POST(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
   if (!secret || req.headers.get("x-telegram-bot-api-secret-token") !== secret) {
@@ -259,7 +296,7 @@ export async function POST(req: NextRequest) {
   const cb = update.callback_query;
   if (cb) {
     const cbChatId = cb.message?.chat?.id;
-    if (String(cbChatId ?? "") !== process.env.TELEGRAM_CHAT_ID) {
+    if (!(await isAllowedSource(cb.message?.chat, cb.from?.id))) {
       return NextResponse.json({ ok: true });
     }
     try {
@@ -277,7 +314,7 @@ export async function POST(req: NextRequest) {
   }
 
   const msg = update.message;
-  const fromOurChat = String(msg?.chat?.id ?? "") === process.env.TELEGRAM_CHAT_ID;
+  const fromOurChat = await isAllowedSource(msg?.chat, msg?.from?.id);
 
   if (fromOurChat && msg?.reply_to_message?.message_id) {
     try {
@@ -301,7 +338,7 @@ export async function POST(req: NextRequest) {
       try {
         await sendMessage(
           escapeHtml(`Новое описание сохранено, но карточку переотправить не удалось: ${(e as Error).message}. Ролик остался ждать апрува без карточки.`),
-          { thread: msg.message_thread_id ?? null }
+          { thread: msg.message_thread_id ?? null, chat: msg.chat?.id }
         );
       } catch (notifyError) {
         console.error("farm edit reply notify failed:", notifyError);
@@ -319,7 +356,7 @@ export async function POST(req: NextRequest) {
 
   // "/now@bot_name arg" -> "/now"; отвечаем в ту же тему форума, откуда пришла команда.
   const cmd = text.split(/\s+/)[0].split("@")[0].toLowerCase();
-  const opts: SendOptions = { thread: msg?.message_thread_id ?? null };
+  const opts: SendOptions = { thread: msg?.message_thread_id ?? null, chat: msg?.chat?.id };
 
   try {
     const handledByFarm = parseFarmCommand(text) ? await handleFarmCommand(cmd, text, opts, req) : false;
