@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { access, constants, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,24 +20,49 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
+// ffmpeg-static отдаёт путь, посчитанный на сборке (в проде это /ROOT/...), а в
+// собранной функции файл лежит относительно process.cwd(). Поэтому перебираем
+// кандидатов и берём существующий; в сообщении об ошибке — весь список, иначе
+// ENOENT не говорит вообще ничего.
+function firstExisting(candidates: (string | undefined | null)[], what: string): string {
+  const tried: string[] = [];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    tried.push(candidate);
+    if (existsSync(candidate)) return candidate;
+  }
+  throw new Error(`${what} не найден. Проверены пути: ${tried.join(", ")}`);
+}
+
 function ffmpegPath(): string {
-  const path = process.env.FARM_FFMPEG_PATH ?? ffmpegStatic;
-  if (!path) throw new Error("ffmpeg-static не нашёл бинарник для этой платформы");
-  return path;
+  return firstExisting(
+    [
+      process.env.FARM_FFMPEG_PATH,
+      join(process.cwd(), "node_modules", "ffmpeg-static", "ffmpeg"),
+      ffmpegStatic,
+    ],
+    "бинарник ffmpeg"
+  );
 }
 
 // ffprobe-static не типизирован (нет .d.ts и @types), поэтому путь до бинарника
 // собираем сами, а не через `import ffprobeStatic from "ffprobe-static"" — иначе
 // tsc падает на самом импорте. Каталог уже включён в трассировку в next.config.ts.
 function ffprobePath(): string {
-  return (
-    process.env.FARM_FFPROBE_PATH ??
-    join(process.cwd(), "node_modules", "ffprobe-static", "bin", process.platform, process.arch, "ffprobe")
+  return firstExisting(
+    [
+      process.env.FARM_FFPROBE_PATH,
+      join(process.cwd(), "node_modules", "ffprobe-static", "bin", process.platform, process.arch, "ffprobe"),
+    ],
+    "бинарник ffprobe"
   );
 }
 
 function fontPath(): string {
-  return process.env.FARM_FONT_PATH ?? join(process.cwd(), "assets", "hook.ttf");
+  return firstExisting(
+    [process.env.FARM_FONT_PATH, join(process.cwd(), "assets", "hook.ttf")],
+    "шрифт хука"
+  );
 }
 
 // Копим stderr с потолком: болтливый ffmpeg способен насыпать мегабайты,
@@ -166,7 +192,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     renderItem,
     sendVideoWithButtons,
     deleteBlobQuiet,
-    notify: (text: string, threadId: number | null) => sendMessage(escapeHtml(text), { thread: threadId }),
+    notify: (text: string, threadId: number | null, chatId?: number) =>
+      // Чат берём из задачи: пачку могли завести в личке, и сыпать ошибками в
+      // общую группу — это шум для всех и молчание для того, кто её загрузил.
+      sendMessage(escapeHtml(text), { thread: threadId, ...(chatId ? { chat: chatId } : {}) }),
     triggerRender,
   };
 

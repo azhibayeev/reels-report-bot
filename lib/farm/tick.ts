@@ -68,7 +68,7 @@ export interface RenderTickDeps {
     itemId: string;
   }) => Promise<number>;
   deleteBlobQuiet: (url: string) => Promise<void>;
-  notify: (text: string, threadId: number | null) => Promise<void>;
+  notify: (text: string, threadId: number | null, chatId?: number) => Promise<void>;
   triggerRender: (batchId: string) => Promise<void>;
 }
 
@@ -124,7 +124,8 @@ export async function runRenderTick(batchId: string, deps: RenderTickDeps): Prom
         try {
           await deps.notify(
             `Не смог отметить ролик ${item.index}/${item.total} в работе: ${message}`,
-            item.threadId
+            item.threadId,
+            item.chatId
           );
         } catch (notifyError) {
           console.error("farm notify failed", item.itemId, notifyError);
@@ -152,37 +153,11 @@ export async function runRenderTick(batchId: string, deps: RenderTickDeps): Prom
         });
         await deps.saveItem({ ...item, status: "review", videoUrl, messageId, renderingAt: null });
 
-        // Задача-двойник из другой пачки могла ссылаться на тот же sourceUrl:
-        // список уже получен этой итерацией (listed) — повторный вызов
-        // listItems() здесь сломал бы соседний тест, где второй заход цикла
-        // нарочно отдаёт пустой список.
-        const twins = listed.filter(
-          (i) =>
-            i.itemId !== item.itemId &&
-            i.sourceUrl === item.sourceUrl &&
-            NEEDS_SOURCE_STATUSES.has(i.status)
-        );
-        for (const twin of twins) {
-          try {
-            await deps.saveItem({
-              ...twin,
-              status: "failed",
-              sourceUrl: "",
-              error: "исходник удалён вместе с задачей-двойником из другой пачки",
-            });
-          } catch (twinSaveError) {
-            console.error("farm twin save failed", twin.itemId, twinSaveError);
-            continue;
-          }
-          try {
-            await deps.notify(
-              `Ролик ${twin.index}/${twin.total} потерял исходник: тот же файл собрала другая пачка`,
-              twin.threadId
-            );
-          } catch (notifyError) {
-            console.error("farm notify failed", twin.itemId, notifyError);
-          }
-        }
+        // Раньше здесь задачи с тем же sourceUrl помечались сбойными: подложка
+        // считалась личной, и повторная ссылка означала чужую пачку. Теперь
+        // подложки раздаются по кругу, и одна обслуживает десяток хуков —
+        // «двойник» стал нормой, а не аварией. Удаление исходника ниже само
+        // ждёт, пока ждущих не останется.
 
         // Исходник больше не нужен — но только если он больше никому не нужен:
         // одна подложка раздаётся нескольким хукам по кругу, и удалить её сразу

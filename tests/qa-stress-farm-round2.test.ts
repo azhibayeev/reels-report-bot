@@ -155,7 +155,7 @@ describe("B. /api/farm/start вызван дважды с теми же файл
     expect([...bySource.values()]).toEqual([1, 1]);
   });
 
-  it("исходник, удалённый первой цепочкой, оставляет задачу-двойника без выхода", async () => {
+  it("общая подложка не удаляется, пока её ждёт другой ролик", async () => {
     const item: Item = { ...base, itemId: "twin-1", status: "pending", videoUrl: null, messageId: null };
     const twin: Item = { ...item, itemId: "twin-2", batchId: "b2" };
     const db = new Map<string, Item>([
@@ -181,10 +181,13 @@ describe("B. /api/farm/start вызван дважды с теми же файл
 
     await runRenderTick("b1", deps);
 
-    expect(deleted).toContain(base.sourceUrl);
-    // Двойник из второй пачки остался pending и указывает на удалённый блоб:
-    // любой следующий тик рендера утопит его в «Исходник не скачался (404)».
-    expect(db.get("twin-2")!.sourceUrl).not.toBe(base.sourceUrl);
+    // Подложки раздаются по кругу и обслуживают по десятку хуков, поэтому общий
+    // sourceUrl — норма. Удалить его после первого же ролика значило бы оставить
+    // остальных с мёртвой ссылкой, а пометить их сбойными — убить девять из
+    // десяти. Ждущий ролик остаётся нетронутым, файл — на месте.
+    expect(deleted).not.toContain(base.sourceUrl);
+    expect(db.get("twin-2")!.sourceUrl).toBe(base.sourceUrl);
+    expect(db.get("twin-2")!.status).toBe("pending");
   });
 });
 

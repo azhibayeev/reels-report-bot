@@ -149,7 +149,13 @@ describe("runRenderTick", () => {
 
     await runRenderTick("b1", deps);
 
-    expect(deps.notify).toHaveBeenCalledWith(expect.stringContaining("Не смог отметить"), item.threadId);
+    // Третий аргумент — чат задачи: пачку могли завести в личке, и уведомление
+    // должно прийти туда же, а не в общую группу.
+    expect(deps.notify).toHaveBeenCalledWith(
+      expect.stringContaining("Не смог отметить"),
+      item.threadId,
+      item.chatId
+    );
     expect(deps.triggerRender).not.toHaveBeenCalled();
   });
 
