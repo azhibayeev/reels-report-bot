@@ -34,8 +34,11 @@ describe("getDailyClicks", () => {
     ]);
     const query = JSON.parse(sentBody).query.query as string;
     expect(query).toContain("event = '$pageview'");
-    expect(query).toContain("toDate(timestamp)");
     expect(query).toContain("uniq(person_id)");
+    // Бакеты выровнены на спринт 12:30 Джакарты (как дневной прирост просмотров),
+    // а не по календарной полуночи — иначе последняя точка неполная.
+    expect(query).toContain("toTimeZone(timestamp, 'Asia/Jakarta')");
+    expect(query).toContain("INTERVAL 690 MINUTE");
     // квирк: никаких property-фильтров в WHERE
     expect(query).not.toContain("properties.");
   });

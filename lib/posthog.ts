@@ -80,11 +80,17 @@ export async function getClicksStats(sinceEpoch: number): Promise<ClicksStats> {
   return { sinceEpoch, sources };
 }
 
-// Заходы (уник. люди с $pageview) по календарным дням начиная с sinceEpoch.
+// Заходы (уник. люди с $pageview) по СУТОЧНЫМ СПРИНТАМ, выровненным на 12:30 Джакарты —
+// та же граница, что у дневного прироста просмотров (computeDailyViewGains по снапшотам
+// в 12:30). Иначе линии графика бьются по разным суткам, а последняя точка выходит
+// неполной (полночь→сейчас) и не сходится с «Заходы за сутки» в отчёте.
+//
+// День спринта = дата (в Джакарте) момента, сдвинутого на +11:30 ч: клики от 12:30 текущего
+// дня до 12:30 следующего попадают в ЗАВЕРШАЮЩИЙ день — как метка у просмотров.
 // WHERE держим на event+timestamp (property-фильтры в WHERE ломают PostHog).
 export async function getDailyClicks(sinceEpoch: number): Promise<DayPoint[]> {
   const rows = await phQuery(
-    `SELECT toDate(timestamp) AS d, uniq(person_id) AS u FROM events ` +
+    `SELECT toDate(toTimeZone(timestamp, 'Asia/Jakarta') + INTERVAL 690 MINUTE) AS d, uniq(person_id) AS u FROM events ` +
       `WHERE event = '$pageview' AND timestamp >= toDateTime(${Math.floor(sinceEpoch)}) ` +
       `GROUP BY d ORDER BY d`
   );

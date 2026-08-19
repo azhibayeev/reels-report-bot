@@ -142,6 +142,38 @@ vercel env add CRON_SECRET production
 
 Сохраните значение `CRON_SECRET` — оно понадобится в разделе «Шаг 4. Проверка работы».
 
+### 3.3a. Переменные для секции «Таргет» (реклама + уровни лидов)
+
+Нужны для суточной секции таргета в отчёте и команд `/target` и `/targettotal`.
+Если их не задать — отчёт по рилсам продолжит работать, а секция таргета просто
+не отправится (ошибка изолирована).
+
+**Meta Marketing API** (рекламные цифры: потрачено, показы, клики, охват, лиды, цена за результат):
+
+```bash
+vercel env add META_AD_ACCOUNT_ID production
+```
+*(ID рекламного аккаунта, вида `act_1234567890` или просто `1234567890`)*
+
+```bash
+vercel env add META_ADS_TOKEN production
+```
+*(access-токен с правом `ads_read`; лучше — долгоживущий токен system-user из Business Manager)*
+
+Необязательные:
+- `META_LEAD_ACTION_TYPE` — закрепить точный тип результата-лида (напр. `offsite_conversion.fb_pixel_lead`), если авто-выбор берёт не тот. По умолчанию выбирается самый специфичный `*lead*`.
+- `META_CURRENCY` — валюта на случай, если Insights не вернёт `account_currency` (по умолчанию `USD`).
+
+**Supabase** (разбивка лидов по уровню инвестора — те же значения, что у квиза pilar-qurany):
+
+```bash
+vercel env add SUPABASE_URL production
+```
+```bash
+vercel env add SUPABASE_SERVICE_ROLE_KEY production
+```
+*(возьмите те же значения, что в проекте квиза pilar-qurany — читаем таблицу `leads`)*
+
 ### 3.4. Запустить деплой
 
 ```bash

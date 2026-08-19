@@ -1,7 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { computeReport } from "../../../lib/diff";
-import { escapeHtml, formatClicksMessage, formatCsv, formatInfoMessage, formatNowMessage } from "../../../lib/format";
+import {
+  escapeHtml,
+  formatClicksMessage,
+  formatCsv,
+  formatInfoMessage,
+  formatNowMessage,
+  formatTargetMessage,
+} from "../../../lib/format";
 import { fetchAllReels, fetchFollowersCount, fetchViews } from "../../../lib/instagram";
+import { getLeadLevels } from "../../../lib/leads";
+import { getAdInsights } from "../../../lib/meta";
 import { getClicksStats, lastSprintStart } from "../../../lib/posthog";
 import { jakartaDateKey, loadPreviousSnapshot } from "../../../lib/storage";
 import { sendDocument, sendMessage, SendOptions } from "../../../lib/telegram";
@@ -25,7 +34,9 @@ const HELP =
   "/otchet — таблица (CSV) по всем рилсам с приростом\n" +
   "/info — общая статистика по всем рилсам\n" +
   "/kliki — заходы по ссылкам за спринт (с 12:30)\n" +
-  "/klikitotal — заходы по ссылкам за всё время";
+  "/klikitotal — заходы по ссылкам за всё время\n" +
+  "/target — таргет за сутки (реклама + уровни лидов)\n" +
+  "/targettotal — таргет за всё время (тотал по всем показателям)";
 
 // Живой замер: список рилсов + актуальные просмотры. Снапшот НЕ сохраняем,
 // чтобы не сдвигать базу ежедневного отчёта.
@@ -72,6 +83,21 @@ async function handleCommand(cmd: string, opts: SendOptions): Promise<void> {
   }
   if (cmd === "/klikitotal") {
     await sendMessage(formatClicksMessage(await getClicksStats(0), "Заходы по ссылкам · за всё время"), opts);
+    return;
+  }
+  if (cmd === "/target") {
+    const ads = await getAdInsights("yesterday");
+    const levels = await getLeadLevels(lastSprintStart().toISOString());
+    await sendMessage(
+      formatTargetMessage(ads, levels, "за сутки", "🗓 Реклама — вчерашние сутки · лиды — с 12:30 вчера"),
+      opts
+    );
+    return;
+  }
+  if (cmd === "/targettotal") {
+    const ads = await getAdInsights("maximum");
+    const levels = await getLeadLevels(null);
+    await sendMessage(formatTargetMessage(ads, levels, "за всё время", "За всё время"), opts);
     return;
   }
   if (cmd === "/info") {
@@ -129,6 +155,8 @@ export async function GET(req: NextRequest) {
         { command: "info", description: "Общая статистика по всем рилсам" },
         { command: "kliki", description: "Заходы по ссылкам за спринт (с 12:30)" },
         { command: "klikitotal", description: "Заходы по ссылкам за всё время" },
+        { command: "target", description: "Таргет за сутки (реклама + уровни лидов)" },
+        { command: "targettotal", description: "Таргет за всё время (тотал)" },
       ],
     }),
   });
