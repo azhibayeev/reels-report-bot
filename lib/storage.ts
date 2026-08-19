@@ -1,9 +1,7 @@
 import crypto from "node:crypto";
 import { list, put } from "@vercel/blob";
+import { AccountConfig } from "./accounts";
 import { Snapshot } from "./types";
-
-const SNAP_PREFIX = "snapshots/";
-const TOKEN_PATH = "state/token.enc";
 
 const dateKeyFmt = new Intl.DateTimeFormat("en-CA", {
   timeZone: "Asia/Jakarta",
@@ -16,8 +14,8 @@ export function jakartaDateKey(d: Date): string {
   return dateKeyFmt.format(d); // en-CA => YYYY-MM-DD
 }
 
-export async function saveSnapshot(key: string, snap: Snapshot): Promise<void> {
-  await put(`${SNAP_PREFIX}${key}.json`, JSON.stringify(snap), {
+export async function saveSnapshot(key: string, snap: Snapshot, acc: AccountConfig): Promise<void> {
+  await put(`${acc.snapshotPrefix}${key}.json`, JSON.stringify(snap), {
     access: "public",
     contentType: "application/json",
     addRandomSuffix: false,
@@ -25,10 +23,10 @@ export async function saveSnapshot(key: string, snap: Snapshot): Promise<void> {
   });
 }
 
-export async function loadPreviousSnapshot(todayKey: string): Promise<Snapshot | null> {
-  const { blobs } = await list({ prefix: SNAP_PREFIX });
+export async function loadPreviousSnapshot(todayKey: string, acc: AccountConfig): Promise<Snapshot | null> {
+  const { blobs } = await list({ prefix: acc.snapshotPrefix });
   const prev = blobs
-    .filter((b) => b.pathname < `${SNAP_PREFIX}${todayKey}.json`)
+    .filter((b) => b.pathname < `${acc.snapshotPrefix}${todayKey}.json`)
     .sort((a, b) => (a.pathname < b.pathname ? 1 : -1))[0];
   if (!prev) return null;
   const res = await fetch(`${prev.url}?ts=${Date.now()}`, { cache: "no-store" });
@@ -37,8 +35,8 @@ export async function loadPreviousSnapshot(todayKey: string): Promise<Snapshot |
 }
 
 // Последние `limit` снапшотов по возрастанию даты (для рядов динамики).
-export async function loadRecentSnapshots(limit: number): Promise<Snapshot[]> {
-  const { blobs } = await list({ prefix: SNAP_PREFIX });
+export async function loadRecentSnapshots(limit: number, acc: AccountConfig): Promise<Snapshot[]> {
+  const { blobs } = await list({ prefix: acc.snapshotPrefix });
   const recent = blobs
     .sort((a, b) => (a.pathname < b.pathname ? -1 : 1)) // по возрастанию даты в имени
     .slice(-limit);
@@ -77,13 +75,11 @@ export async function loadLastReportKey(): Promise<string | null> {
   }
 }
 
-const DURATIONS_PATH = "state/durations.json";
-
 // Длительность ролика не меняется, а достаётся дорого (Range-запрос к CDN на каждый
 // рилс). Поэтому держим кэш id → секунды и щупаем только новые ролики.
-export async function loadDurations(): Promise<Record<string, number>> {
-  const { blobs } = await list({ prefix: DURATIONS_PATH });
-  const blob = blobs.find((b) => b.pathname === DURATIONS_PATH);
+export async function loadDurations(acc: AccountConfig): Promise<Record<string, number>> {
+  const { blobs } = await list({ prefix: acc.durationsPath });
+  const blob = blobs.find((b) => b.pathname === acc.durationsPath);
   if (!blob) return {};
   const res = await fetch(`${blob.url}?ts=${Date.now()}`, { cache: "no-store" });
   if (!res.ok) return {};
@@ -94,8 +90,8 @@ export async function loadDurations(): Promise<Record<string, number>> {
   }
 }
 
-export async function saveDurations(map: Record<string, number>): Promise<void> {
-  await put(DURATIONS_PATH, JSON.stringify(map), {
+export async function saveDurations(map: Record<string, number>, acc: AccountConfig): Promise<void> {
+  await put(acc.durationsPath, JSON.stringify(map), {
     access: "public",
     contentType: "application/json",
     addRandomSuffix: false,
@@ -122,12 +118,12 @@ function encryptionKey(): Buffer {
   return crypto.createHash("sha256").update(secret).digest();
 }
 
-export async function saveTokenState(state: TokenState): Promise<void> {
+export async function saveTokenState(state: TokenState, acc: AccountConfig): Promise<void> {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv("aes-256-gcm", encryptionKey(), iv);
   const enc = Buffer.concat([cipher.update(JSON.stringify(state), "utf8"), cipher.final()]);
   const payload = Buffer.concat([iv, cipher.getAuthTag(), enc]).toString("base64");
-  await put(TOKEN_PATH, payload, {
+  await put(acc.tokenPath, payload, {
     access: "public",
     contentType: "text/plain",
     addRandomSuffix: false,
@@ -136,9 +132,9 @@ export async function saveTokenState(state: TokenState): Promise<void> {
   });
 }
 
-export async function loadTokenState(): Promise<TokenState | null> {
-  const { blobs } = await list({ prefix: TOKEN_PATH });
-  const blob = blobs.find((b) => b.pathname === TOKEN_PATH);
+export async function loadTokenState(acc: AccountConfig): Promise<TokenState | null> {
+  const { blobs } = await list({ prefix: acc.tokenPath });
+  const blob = blobs.find((b) => b.pathname === acc.tokenPath);
   if (!blob) return null;
   const res = await fetch(`${blob.url}?ts=${Date.now()}`, { cache: "no-store" });
   if (!res.ok) return null;

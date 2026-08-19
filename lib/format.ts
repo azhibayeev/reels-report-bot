@@ -42,9 +42,15 @@ function followerChangesLine(c: FollowerChanges): string {
   return `➕ Подписалось: <b>${nf.format(c.follows)}</b> · ➖ Отписалось: <b>${nf.format(c.unfollows)}</b> (валовые данные Instagram за период; их разница может не совпадать с чистым приростом выше)`;
 }
 
-export function formatMessage(r: Report, changes?: FollowerChanges | null): string {
+// Подпись аккаунта в заголовке: в чат приходят отчёты по нескольким аккаунтам подряд,
+// без метки их не различить. Пусто — заголовок как раньше.
+function withAccount(title: string, account?: string): string {
+  return account ? `${title} · ${escapeHtml(account)}` : title;
+}
+
+export function formatMessage(r: Report, changes?: FollowerChanges | null, account?: string): string {
   const lines: string[] = [];
-  lines.push("📊 <b>Отчёт по рилсам</b>");
+  lines.push(`📊 <b>${withAccount("Отчёт по рилсам", account)}</b>`);
   if (r.periodStart) {
     lines.push(`Период: с ${fmtDateTime(r.periodStart)} по ${fmtDateTime(r.periodEnd)} (время Джакарты)`);
   } else {
@@ -76,9 +82,9 @@ export function formatMessage(r: Report, changes?: FollowerChanges | null): stri
 }
 
 // Ответ на команду /info: общая статистика по аккаунту на текущий момент.
-export function formatInfoMessage(snap: Snapshot): string {
+export function formatInfoMessage(snap: Snapshot, account?: string): string {
   const lines: string[] = [];
-  lines.push("📈 <b>Общая статистика</b>");
+  lines.push(`📈 <b>${withAccount("Общая статистика", account)}</b>`);
   lines.push(`На ${fmtDateTime(snap.takenAt)} (время Джакарты)`);
   lines.push("");
   if (snap.followersCount != null) {
@@ -98,9 +104,9 @@ export function formatInfoMessage(snap: Snapshot): string {
 }
 
 // Ответ на команду /now: период от последнего ежедневного замера (~12:30) до текущего момента.
-export function formatNowMessage(r: Report): string {
+export function formatNowMessage(r: Report, account?: string): string {
   const lines: string[] = [];
-  lines.push("⚡️ <b>Отчёт на сейчас</b>");
+  lines.push(`⚡️ <b>${withAccount("Отчёт на сейчас", account)}</b>`);
   if (r.isBaseline) {
     lines.push(`На ${fmtDateTime(r.periodEnd)} (время Джакарты)`);
     lines.push("");

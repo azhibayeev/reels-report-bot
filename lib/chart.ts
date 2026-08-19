@@ -30,8 +30,19 @@ function align(dates: string[], series: DayPoint[]): (number | null)[] {
   return dates.map((d) => (by.has(d) ? (by.get(d) as number) : null));
 }
 
+// Рисовать линию по одной точке бессмысленно, поэтому графика может не быть —
+// причина возвращается текстом, чтобы «график молча пропал» было видно в ответе роута.
+export function chartSkipReason(views: DayPoint[], clicks: DayPoint[]): string | null {
+  if (views.length >= 2 || clicks.length >= 2) return null;
+  return `мало данных (дней с просмотрами: ${views.length}, с заходами: ${clicks.length})`;
+}
+
 // Конфиг Chart.js для QuickChart: две линии (просмотры/заходы) на двух шкалах.
-export function buildTrendChart(views: DayPoint[], clicks: DayPoint[]): Record<string, unknown> {
+export function buildTrendChart(
+  views: DayPoint[],
+  clicks: DayPoint[],
+  title = "Динамика за 14 дней"
+): Record<string, unknown> {
   const dates = Array.from(new Set([...views, ...clicks].map((p) => p.date))).sort();
   return {
     type: "line",
@@ -60,7 +71,7 @@ export function buildTrendChart(views: DayPoint[], clicks: DayPoint[]): Record<s
     },
     options: {
       plugins: {
-        title: { display: true, text: "Динамика за 14 дней" },
+        title: { display: true, text: title },
         legend: { position: "top" },
       },
       scales: {

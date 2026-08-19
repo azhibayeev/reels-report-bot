@@ -81,10 +81,12 @@ export async function getClicksStats(sinceEpoch: number): Promise<ClicksStats> {
 }
 
 // Заходы (уник. люди с $pageview) по календарным дням начиная с sinceEpoch.
-// WHERE держим на event+timestamp (property-фильтры в WHERE ломают PostHog).
-export async function getDailyClicks(sinceEpoch: number): Promise<DayPoint[]> {
+// WHERE держим на event+timestamp (property-фильтры в WHERE ломают PostHog), поэтому
+// отбор по ссылке конкретного аккаунта (condition) уходит внутрь uniqIf.
+export async function getDailyClicks(sinceEpoch: number, condition?: string | null): Promise<DayPoint[]> {
+  const counter = condition ? `uniqIf(person_id, ${condition})` : "uniq(person_id)";
   const rows = await phQuery(
-    `SELECT toDate(timestamp) AS d, uniq(person_id) AS u FROM events ` +
+    `SELECT toDate(timestamp) AS d, ${counter} AS u FROM events ` +
       `WHERE event = '$pageview' AND timestamp >= toDateTime(${Math.floor(sinceEpoch)}) ` +
       `GROUP BY d ORDER BY d`
   );
