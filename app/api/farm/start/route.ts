@@ -13,7 +13,13 @@ import {
 import { deleteBlobQuiet, saveBatch, saveItem, SOURCES_PREFIX } from "../../../../lib/farm/store";
 import { triggerRender } from "../../../../lib/farm/tick";
 import { verifyBatchToken } from "../../../../lib/farm/tokens";
-import { DEFAULT_POSITION, HookPosition, isHookPosition } from "../../../../lib/farm/types";
+import {
+  DEFAULT_DURATION,
+  DEFAULT_POSITION,
+  HookPosition,
+  isHookPosition,
+  isReelDuration,
+} from "../../../../lib/farm/types";
 import { sendMessage } from "../../../../lib/telegram";
 
 export const dynamic = "force-dynamic";
@@ -32,6 +38,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     files?: { url: string; bytes: number }[];
     groups?: { hooks?: string[]; caption?: string; musicUrl?: string | null }[];
     position?: string;
+    seconds?: number;
   };
   if (!body.token || !Array.isArray(body.files)) {
     return NextResponse.json({ error: "token и files обязательны" }, { status: 400 });
@@ -40,6 +47,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // Клиенту верить нельзя ровно так же, как в размере файла: значение уедет в
   // имя фильтра ffmpeg, так что любая строка кроме трёх известных — дефолт.
   const position: HookPosition = isHookPosition(body.position) ? body.position : DEFAULT_POSITION;
+  // Значение уедет в -t ffmpeg, поэтому берём только из списка известных.
+  const seconds = isReelDuration(body.seconds) ? body.seconds : DEFAULT_DURATION;
 
   // До этой проверки ничего в хранилище не удаляем: удаление по ссылке из
   // неавторизованного запроса — дыра.
@@ -108,7 +117,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const { pairs, sources } = interleave(assignSources(groups, checked));
 
     ({ total } = await startBatch(
-      { chatId: claim.chatId, threadId: claim.threadId, pairs, files: sources, position },
+      { chatId: claim.chatId, threadId: claim.threadId, pairs, files: sources, position, seconds },
       {
         saveItem,
         saveBatch,

@@ -10,6 +10,8 @@ export interface RenderSpec {
   position?: HookPosition;
   /** Дорожка на весь ролик; задана — заменяет звук подложки, зациклившись. */
   musicPath?: string | null;
+  /** Длина ролика в секундах; не задана — REEL_SECONDS. */
+  seconds?: number;
 }
 
 export type Runner = (bin: string, args: string[]) => Promise<{ code: number; stderr: string }>;
@@ -61,6 +63,7 @@ const ENCODE = [
 ];
 
 export function ffmpegArgs(spec: RenderSpec): string[] {
+  const seconds = spec.seconds ?? REEL_SECONDS;
   const multiplier = POSITION_Y[spec.position ?? DEFAULT_POSITION];
   // drawtext центрирует блок текста целиком, поэтому вторая строка хука начинала
   // бы там же, где первая — по одному drawtext на строку, у каждого свой x/y.
@@ -80,7 +83,7 @@ export function ffmpegArgs(spec: RenderSpec): string[] {
   // Видео зацикливаем на входе: подложка короче семи секунд иначе оборвала бы
   // ролик раньше времени, а -t ниже всё равно режет по нужной длине.
   const videoIn = ["-stream_loop", "-1", "-i", spec.sourcePath];
-  const fadeStart = Math.max(0, REEL_SECONDS - FADE_SECONDS);
+  const fadeStart = Math.max(0, seconds - FADE_SECONDS);
 
   if (spec.musicPath) {
     // Музыку зацикливаем фильтром aloop, а НЕ вторым -stream_loop: на аудиовходе
@@ -88,7 +91,7 @@ export function ffmpegArgs(spec: RenderSpec): string[] {
     // процесс не завершается вовсе). aloop отрабатывает и на треке короче ролика.
     const audioChain = [
       "aloop=loop=-1:size=2147483647",
-      `atrim=duration=${REEL_SECONDS}`,
+      `atrim=duration=${seconds}`,
       `volume=${MUSIC_VOLUME}`,
       `afade=t=out:st=${fadeStart}:d=${FADE_SECONDS}`,
     ].join(",");
@@ -106,7 +109,7 @@ export function ffmpegArgs(spec: RenderSpec): string[] {
       "[a]",
       ...ENCODE,
       "-t",
-      String(REEL_SECONDS),
+      String(seconds),
       spec.outPath,
     ];
   }
@@ -122,7 +125,7 @@ export function ffmpegArgs(spec: RenderSpec): string[] {
     ...(spec.hasAudio ? [] : ["-map", "0:v:0", "-map", "1:a:0"]),
     ...ENCODE,
     "-t",
-    String(REEL_SECONDS),
+    String(seconds),
     spec.outPath,
   ];
 }

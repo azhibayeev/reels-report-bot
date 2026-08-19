@@ -120,6 +120,7 @@ async function renderItem(item: Item): Promise<string> {
         hasAudio,
         position: item.position ?? DEFAULT_POSITION,
         musicPath,
+        seconds: item.seconds,
       },
       {
         runner,

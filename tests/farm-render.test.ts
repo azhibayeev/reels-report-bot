@@ -156,3 +156,17 @@ describe("музыка на ролик", () => {
     expect(args).not.toContain("anullsrc");
   });
 });
+
+describe("длина ролика", () => {
+  it("по умолчанию семь секунд", () => {
+    expect(ffmpegArgs(spec).join(" ")).toContain("-t 7");
+  });
+
+  it("выбранная длина попадает и в -t, и в обрезку музыки, и в затухание", () => {
+    const args = ffmpegArgs({ ...spec, seconds: 15, musicPath: "/tmp/track.m4a" }).join(" ");
+    expect(args).toContain("-t 15");
+    expect(args).toContain("atrim=duration=15");
+    expect(args).toContain("afade=t=out:st=14.4:d=0.6");
+    expect(args).not.toContain("-t 7");
+  });
+});

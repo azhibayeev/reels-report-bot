@@ -242,6 +242,7 @@ export async function startBatch(
     pairs: Pair[];
     files: UploadedFile[];
     position?: HookPosition;
+    seconds?: number;
   },
   deps: StartDeps
 ): Promise<{ batchId: string; total: number }> {
@@ -293,6 +294,7 @@ export async function startBatch(
         caption: input.pairs[i].caption,
         sourceUrl: input.files[i].url,
         musicUrl: input.pairs[i].musicUrl ?? null,
+        seconds: input.seconds,
         videoUrl: null,
         messageId: null,
         editPromptId: null,

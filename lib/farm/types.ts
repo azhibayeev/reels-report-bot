@@ -16,6 +16,14 @@ export interface Pair {
   musicUrl?: string | null;
 }
 
+export const REEL_DURATIONS = [7, 10, 15] as const;
+export type ReelDuration = (typeof REEL_DURATIONS)[number];
+export const DEFAULT_DURATION: ReelDuration = 7;
+
+export function isReelDuration(value: unknown): value is ReelDuration {
+  return typeof value === "number" && (REEL_DURATIONS as readonly number[]).includes(value);
+}
+
 export const HOOK_POSITIONS = ["top", "center", "bottom"] as const;
 export type HookPosition = (typeof HOOK_POSITIONS)[number];
 export const DEFAULT_POSITION: HookPosition = "top";
@@ -39,6 +47,8 @@ export interface Item {
   sourceUrl: string;
   /** Необязательно: задачи, созданные до появления музыки, поля не имеют. */
   musicUrl?: string | null;
+  /** Длина ролика в секундах; у старых задач поля нет — берётся значение по умолчанию. */
+  seconds?: number;
   videoUrl: string | null;
   messageId: number | null;
   /** Сообщение force_reply: по ответу на него находим ролик при правке описания. */

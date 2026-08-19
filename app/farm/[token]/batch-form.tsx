@@ -4,7 +4,12 @@ import { upload } from "@vercel/blob/client";
 import { useRef, useState } from "react";
 import { parseHookList } from "../../../lib/farm/parse";
 import { validateGroups } from "../../../lib/farm/start";
-import type { HookPosition } from "../../../lib/farm/types";
+import {
+  DEFAULT_DURATION,
+  REEL_DURATIONS,
+  type HookPosition,
+  type ReelDuration,
+} from "../../../lib/farm/types";
 
 type Stage = "idle" | "uploading" | "starting" | "done" | "error";
 
@@ -32,6 +37,7 @@ export default function BatchForm({
   const [files, setFiles] = useState<File[]>([]);
   const [groups, setGroups] = useState<Group[]>([{ ...EMPTY_GROUP }]);
   const [position, setPosition] = useState<HookPosition>(defaultPosition);
+  const [seconds, setSeconds] = useState<ReelDuration>(DEFAULT_DURATION);
   const [stage, setStage] = useState<Stage>("idle");
   const [done, setDone] = useState(0);
   const [message, setMessage] = useState("");
@@ -126,7 +132,7 @@ export default function BatchForm({
       const res = await fetch("/api/farm/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, files: results, groups: groupsPayload, position }),
+        body: JSON.stringify({ token, files: results, groups: groupsPayload, position, seconds }),
       });
       const data = (await res.json()) as { ok?: boolean; total?: number; error?: string };
       if (!res.ok || !data.ok) {
@@ -244,7 +250,26 @@ export default function BatchForm({
       </section>
 
       <section style={{ marginTop: "1.5rem" }}>
-        <h2 style={{ fontSize: "1.1rem", marginBottom: ".3rem" }}>3. Позиция хука</h2>
+        <h2 style={{ fontSize: "1.1rem", marginBottom: ".3rem" }}>3. Длина ролика</h2>
+        <p style={{ margin: "0 0 .4rem", color: "#566b60" }}>
+          Одна на всю пачку. Подложка длиннее — обрежется с начала, короче — зациклится.
+        </p>
+        <p style={{ margin: "0 0 1.2rem" }}>
+          {REEL_DURATIONS.map((value) => (
+            <label key={value} style={{ marginRight: "1.2rem" }}>
+              <input
+                type="radio"
+                name="seconds"
+                checked={seconds === value}
+                onChange={() => setSeconds(value)}
+                disabled={busy || stage === "done"}
+              />{" "}
+              {value} сек
+            </label>
+          ))}
+        </p>
+
+        <h2 style={{ fontSize: "1.1rem", marginBottom: ".3rem" }}>4. Позиция хука</h2>
         <p style={{ margin: 0 }}>
           {(Object.keys(POSITION_LABELS) as HookPosition[]).map((value) => (
             <label key={value} style={{ marginRight: "1.2rem" }}>
