@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleCommand, parseCommand } from "../lib/commands";
+import { blockingWarnings, handleCommand, parseCommand, parseEdit, renderCueList } from "../lib/commands";
+import type { Cue } from "../lib/cues";
 import type { Job } from "../lib/jobs";
 
 function makeJob(overrides: Partial<Job> = {}): Job {
@@ -8,8 +9,9 @@ function makeJob(overrides: Partial<Job> = {}): Job {
     chatId: 42,
     sourceUrl: "https://blob/source.mov",
     resultUrl: null,
-    status: "pending",
+    status: "transcribing",
     durationSec: 90,
+    cues: [],
     deliveringAt: null,
     createdAt: new Date().toISOString(),
     error: null,
@@ -74,5 +76,65 @@ describe("handleCommand", () => {
     const text = await handleCommand("help", 42, { ...deps, listJobs: vi.fn() });
     expect(text).toContain("/sub");
     expect(text).toContain("/status");
+  });
+});
+
+const cues: Cue[] = [
+  { i: 1, start: 0, end: 2, ru: "Читай дуа", id: "Bacalah doa", needsManual: false, warning: null },
+  { i: 2, start: 2.1, end: 4, ru: "Бисмилляхи", id: null, needsManual: true, warning: "впиши руками" },
+];
+
+describe("parseEdit", () => {
+  it("разбирает правку по номеру", () => {
+    expect(parseEdit("1 Bacalah doa ini", cues)).toEqual({ i: 1, text: "Bacalah doa ini" });
+  });
+
+  it("берёт весь остаток строки, включая пробелы", () => {
+    expect(parseEdit("2 Dengan nama Allah  yang", cues)?.text).toBe("Dengan nama Allah  yang");
+  });
+
+  it("не принимает номер вне диапазона", () => {
+    expect(parseEdit("9 текст", cues)).toBeNull();
+  });
+
+  it("не принимает номер без текста", () => {
+    expect(parseEdit("1", cues)).toBeNull();
+    expect(parseEdit("1   ", cues)).toBeNull();
+  });
+
+  it("не принимает сообщение без ведущего числа", () => {
+    expect(parseEdit("Bacalah doa", cues)).toBeNull();
+  });
+
+  it("не принимает команды", () => {
+    expect(parseEdit("/ok", cues)).toBeNull();
+  });
+});
+
+describe("blockingWarnings", () => {
+  it("собирает номера реплик, которые блокируют рендер", () => {
+    expect(blockingWarnings(cues)).toEqual([2]);
+  });
+
+  it("на чистых репликах пусто", () => {
+    expect(blockingWarnings([cues[0]])).toEqual([]);
+  });
+});
+
+describe("renderCueList", () => {
+  const job = { jobId: "j", chatId: 1, cues, status: "awaiting", durationSec: 4 } as Job;
+
+  it("нумерует и показывает таймкоды", () => {
+    const out = renderCueList(job);
+    expect(out).toContain("1.");
+    expect(out).toContain("0:00");
+  });
+
+  it("показывает предупреждения", () => {
+    expect(renderCueList(job)).toContain("впиши руками");
+  });
+
+  it("показывает русский оригинал", () => {
+    expect(renderCueList(job)).toContain("Читай дуа");
   });
 });
