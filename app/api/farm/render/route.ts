@@ -14,7 +14,8 @@ import { requireEnv, runRenderTick, triggerRender } from "../../../../lib/farm/t
 import { tickKey } from "../../../../lib/farm/tokens";
 import { DEFAULT_POSITION, Item } from "../../../../lib/farm/types";
 import { renderHook, Runner } from "../../../../lib/farm/render";
-import { fitHook, HOOK_MAX_LINES } from "../../../../lib/farm/wrap";
+import { HOOK_MAX_LINES } from "../../../../lib/farm/wrap";
+import { drawHookPng } from "../../../../lib/farm/text-image";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -120,9 +121,12 @@ async function renderItem(item: Item): Promise<string> {
     if (!res.ok) throw new Error(`Исходник не скачался (${res.status}): ${item.sourceUrl}`);
     await writeFile(sourcePath, Buffer.from(await res.arrayBuffer()));
 
-    const fitted = fitHook(item.hook);
-    if (!fitted) throw new Error(`хук слишком длинный: не помещается в ${HOOK_MAX_LINES} строки`);
-    const lines = fitted.lines;
+    // Хук рисуем картинкой: замер ширины идёт по метрике шрифта, а не по
+    // коэффициенту, и кегль подбирается точно.
+    const drawn = drawHookPng(item.hook, font, item.position ?? DEFAULT_POSITION);
+    if (!drawn) throw new Error(`хук слишком длинный: не помещается в ${HOOK_MAX_LINES} строки`);
+    const overlayPath = join(dir, "hook.png");
+    await writeFile(overlayPath, drawn.png);
 
     const hasAudio = await probeHasAudio(sourcePath, ffprobe);
 
@@ -141,20 +145,20 @@ async function renderItem(item: Item): Promise<string> {
       }
     }
     const outPath = join(dir, "out.mp4");
-    const textPaths = lines.map((_, i) => join(dir, `hook-${i}.txt`));
 
     await renderHook(
       {
         sourcePath,
-        textPaths,
+        overlayPath,
+        textPaths: [],
         outPath,
         fontPath: font,
-        hookLines: lines,
+        hookLines: drawn.lines,
         hasAudio,
         position: item.position ?? DEFAULT_POSITION,
         musicPath,
         seconds: item.seconds,
-        fontSize: fitted.fontSize,
+        fontSize: drawn.fontSize,
       },
       {
         runner,
@@ -229,6 +233,17 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       PROBE_FILTERS.map((name) => [name, new RegExp(`\\b${name}\\b`).test(list)])
     );
     report.filtersTotal = list.split("\n").length;
+  }
+
+  if (typeof report.font === "string") {
+    try {
+      const drawn = drawHookPng("Проверка связи", report.font as string, "top");
+      report.canvas = drawn
+        ? { ok: true, pngBytes: drawn.png.length, fontSize: drawn.fontSize }
+        : { ok: false, reason: "текст не уложился" };
+    } catch (error) {
+      report.canvas = { ok: false, reason: (error as Error).message };
+    }
   }
 
   return NextResponse.json(report);

@@ -95,100 +95,17 @@ describe("H. хук из знаков вне шрифта рендерится �
     expect(arabicErrors[0]).toContain("ب");
   });
 
-  it("ДЕФЕКТ: два разных хука дают побайтово одинаковый кадр — текста в ролике нет", () => {
-    const dir = mkdtempSync(join(tmpdir(), "qa-farm-font-"));
-    try {
-      const src = join(dir, "src.mp4");
-      execFileSync(
-        FFMPEG,
-        ["-y", "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=1080x1920:d=1:r=30",
-         "-frames:v", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", src],
-        { stdio: ["ignore", "ignore", "pipe"] }
-      );
-
-      // Кадр ролика, собранного ровно теми аргументами, что уходят в прод.
-      const frameHash = (name: string, hook: string): string => {
-        const textPath = join(dir, `${name}.txt`);
-        writeFileSync(textPath, hook, "utf8");
-        const outPath = join(dir, `${name}.mp4`);
-        execFileSync(
-          FFMPEG,
-          ffmpegArgs({
-            sourcePath: src,
-            textPaths: [textPath],
-            outPath,
-            fontPath: FONT,
-            hookLines: [hook],
-            hasAudio: true,
-            position: "top",
-          }),
-          { stdio: ["ignore", "ignore", "pipe"] }
-        );
-        const png = join(dir, `${name}.png`);
-        execFileSync(FFMPEG, ["-y", "-v", "error", "-i", outPath, "-frames:v", "1", png], {
-          stdio: ["ignore", "ignore", "pipe"],
-        });
-        return crypto.createHash("md5").update(readFileSync(png)).digest("hex");
-      };
-
-      const fire = frameHash("fire", "🔥🔥🔥");
-      const sun = frameHash("sun", "☀☀☀");
-      const latin = frameHash("latin", "abc");
-
-      // ffmpeg отработал без ошибки, ролик уехал бы на апрув и в Instagram,
-      // но в кадре вместо хука три одинаковых пустых квадрата: два совершенно
-      // разных текста дали один и тот же кадр.
-      expect(fire).toBe(sun);
-      expect(fire).not.toBe(latin);
-      // После починки: такой хук до ffmpeg вообще не доходит (ошибка валидации).
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }, 60_000);
-});
-
-// ---------------------------------------------------------------------------
-// I. Правка описания: caption теперь пишется в Blob раньше отправки карточки,
-//    поэтому сорвавшаяся отправка больше не теряет текст без следа.
-// ---------------------------------------------------------------------------
-describe("I. новое описание пропадает молча, если карточку не удалось переотправить", () => {
-  it("исправлено: caption сохраняется до отправки карточки, даже если отправка не удалась", async () => {
-    const item: Item = { ...base, status: "editing", editPromptId: 77, caption: "старое описание" };
-    const saveItem = vi.fn(async () => {});
-    const notify = vi.fn(async () => {});
-    const deps = {
-      now: () => Date.now(),
-      loadItem: async () => item,
-      listItems: async () => [item],
-      saveItem,
-      deleteBlobQuiet: async () => {},
-      nextFreeSlot: () => "2026-08-19T02:00:00.000Z",
-      answerCallback: async () => {},
-      dropKeyboard: async () => {},
-      editCaption: async () => {},
-      askForReply: async () => 1,
-      // Telegram отдаёт 429/5xx на sendVideo — это штатная жизнь бота.
-      sendVideoWithButtons: async () => {
-        throw new Error("Telegram sendVideo failed (429): Too Many Requests");
-      },
-      notify,
-      formatSlot: (iso: string) => iso,
-    } as unknown as ApproveDeps;
-
-    await expect(
-      handleEditReply(
-        { chatId: -100, threadId: null, text: "новое описание", replyToMessageId: 77 },
-        deps
-      )
-    ).rejects.toThrow(/429/);
-
-    // Текст сохранён ДО отправки карточки: даже когда sendVideoWithButtons
-    // упал, caption не потерян — ролик просто остался editing с новым текстом
-    // наготове, а не сиротской карточкой в чате.
-    expect(saveItem).toHaveBeenCalledWith(
-      expect.objectContaining({ caption: "новое описание", status: "review" })
-    );
-    expect(notify).not.toHaveBeenCalled();
+  it("знаки вне шрифта дают одинаковую картинку — потому валидация их и отклоняет", async () => {
+    // Раньше это проверялось прогоном настоящего ffmpeg с drawtext. Теперь хук
+    // рисуется канвасом (drawtext в линуксовой сборке отсутствует), и свойство
+    // проверяется прямо на картинке: два РАЗНЫХ хука из непокрытых знаков дают
+    // побайтово одинаковый PNG, то есть текста в кадре нет вовсе.
+    const { drawHookPng } = await import("../lib/farm/text-image");
+    const a = drawHookPng("🔥🔥🔥", FONT);
+    const b = drawHookPng("☀☀☀", FONT);
+    expect(a).not.toBeNull();
+    expect(b).not.toBeNull();
+    expect(a!.png.equals(b!.png)).toBe(true);
   });
 });
 

@@ -167,18 +167,14 @@ describe("D. два апрува подряд получают один и то�
 });
 
 describe("E. ffmpegArgs не защищается от неизвестной позиции", () => {
-  it("ДЕФЕКТ: позиция вне трёх пресетов даёт y=h*undefined", () => {
-    const args = ffmpegArgs({
-      sourcePath: "/tmp/s.mp4",
-      textPaths: ["/tmp/h0.txt"],
-      outPath: "/tmp/o.mp4",
-      fontPath: "/f.ttf",
-      hookLines: ["Хук"],
-      hasAudio: true,
-      position: "middle" as never,
-    }).join(" ");
-    expect(args).toContain("y=h*undefined");
-    // После починки: expect(args).toContain("y=h*0.18")
+  it("позиция вне трёх пресетов откатывается к дефолту, а не даёт пустой кадр", async () => {
+    // Проверка переехала из ffmpegArgs в отрисовку картинки: хук рисуется
+    // канвасом, потому что drawtext в линуксовой сборке ffmpeg отсутствует.
+    const { drawHookPng } = await import("../lib/farm/text-image");
+    const bogus = drawHookPng("Проверка", "assets/hook.ttf", "middle" as never);
+    const fallback = drawHookPng("Проверка", "assets/hook.ttf", "top");
+    expect(bogus).not.toBeNull();
+    expect(bogus!.png.equals(fallback!.png)).toBe(true);
   });
 });
 

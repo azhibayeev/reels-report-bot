@@ -2,6 +2,8 @@ import { HookPosition, DEFAULT_POSITION } from "./types";
 
 export interface RenderSpec {
   sourcePath: string;
+  /** PNG во весь кадр с уже нарисованным хуком: накладывается фильтром overlay. */
+  overlayPath?: string;
   textPaths: string[];
   outPath: string;
   fontPath: string;
@@ -68,66 +70,51 @@ const ENCODE = [
 
 export function ffmpegArgs(spec: RenderSpec): string[] {
   const seconds = spec.seconds ?? REEL_SECONDS;
-  const multiplier = POSITION_Y[spec.position ?? DEFAULT_POSITION];
-  // drawtext центрирует блок текста целиком, поэтому вторая строка хука начинала
-  // бы там же, где первая — по одному drawtext на строку, у каждого свой x/y.
-  // text_align появился только в ffmpeg 7.0, у нас 6.0 (ffmpeg-static).
-  const fontSize = spec.fontSize ?? FONT_SIZE;
-  const drawtexts = spec.hookLines.map((_, i) => {
-    const offset = i * (fontSize + LINE_SPACING);
-    const y = offset === 0 ? `h*${multiplier}` : `h*${multiplier}+${offset}`;
-    // Текст отдаём файлом, чтобы уберечься от разборщика строки фильтра: символы
-    // : ' , ломают его, а апострофы в индонезийском (Qur'an) встречаются постоянно.
-    // От раскрытия %{...} и от съедания \ файл сам по себе не спасает — за это
-    // отвечает expansion=none в STYLE.
-    return `drawtext=fontfile=${spec.fontPath}:textfile=${spec.textPaths[i]}:${style(fontSize)}:x=(w-text_w)/2:y=${y}`;
-  });
-
-  const filter = ["scale=1080:1920:force_original_aspect_ratio=increase", "crop=1080:1920", ...drawtexts].join(",");
-
-  // Видео зацикливаем на входе: подложка короче семи секунд иначе оборвала бы
-  // ролик раньше времени, а -t ниже всё равно режет по нужной длине.
-  const videoIn = ["-stream_loop", "-1", "-i", spec.sourcePath];
   const fadeStart = Math.max(0, seconds - FADE_SECONDS);
 
-  if (spec.musicPath) {
-    // Музыку зацикливаем фильтром aloop, а НЕ вторым -stream_loop: на аудиовходе
-    // -stream_loop с конечным -t уводит ffmpeg в бесконечный цикл (проверено:
-    // процесс не завершается вовсе). aloop отрабатывает и на треке короче ролика.
-    const audioChain = [
-      "aloop=loop=-1:size=2147483647",
-      `atrim=duration=${seconds}`,
-      `volume=${MUSIC_VOLUME}`,
-      `afade=t=out:st=${fadeStart}:d=${FADE_SECONDS}`,
-    ].join(",");
+  // Видео зацикливаем на входе: подложка короче нужной длины иначе оборвала бы
+  // ролик, а -t ниже всё равно режет по выбранной длительности.
+  const inputs = ["-stream_loop", "-1", "-i", spec.sourcePath];
+  const chains: string[] = [`[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[bg]`];
+  let videoLabel = "[bg]";
+  let nextInput = 1;
 
-    return [
-      "-y",
-      ...videoIn,
-      "-i",
-      spec.musicPath,
-      "-filter_complex",
-      `[0:v]${filter}[v];[1:a]${audioChain}[a]`,
-      "-map",
-      "[v]",
-      "-map",
-      "[a]",
-      ...ENCODE,
-      "-t",
-      String(seconds),
-      spec.outPath,
-    ];
+  // Хук — это PNG поверх кадра, а не drawtext: в линуксовой сборке
+  // ffmpeg-static drawtext отсутствует (диагностика на проде: drawtext=false),
+  // а overlay есть в любой сборке.
+  if (spec.overlayPath) {
+    inputs.push("-i", spec.overlayPath);
+    chains.push(`[bg][${nextInput}:v]overlay=0:0[v]`);
+    videoLabel = "[v]";
+    nextInput += 1;
   }
 
-  // Без своей дорожки: звук подложки, а если его нет — тишина, иначе Instagram
-  // получает ролик без аудиопотока.
+  const maps = ["-map", videoLabel];
+  const audioArgs: string[] = [];
+
+  if (spec.musicPath) {
+    inputs.push("-i", spec.musicPath);
+    // Музыку зацикливаем фильтром aloop, а НЕ вторым -stream_loop: на аудиовходе
+    // -stream_loop с конечным -t уводит ffmpeg в бесконечный цикл — проверено.
+    chains.push(
+      `[${nextInput}:a]aloop=loop=-1:size=2147483647,atrim=duration=${seconds},volume=${MUSIC_VOLUME},afade=t=out:st=${fadeStart}:d=${FADE_SECONDS}[a]`
+    );
+    maps.push("-map", "[a]");
+    nextInput += 1;
+  } else if (spec.hasAudio) {
+    maps.push("-map", "0:a:0?");
+  } else {
+    inputs.push("-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100");
+    maps.push("-map", `${nextInput}:a`);
+    nextInput += 1;
+  }
+
   return [
     "-y",
-    ...videoIn,
-    ...(spec.hasAudio ? [] : ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"]),
-    "-vf",
-    filter,
-    ...(spec.hasAudio ? [] : ["-map", "0:v:0", "-map", "1:a:0"]),
+    ...inputs,
+    "-filter_complex",
+    chains.join(";"),
+    ...maps,
     ...ENCODE,
     "-t",
     String(seconds),
@@ -136,13 +123,15 @@ export function ffmpegArgs(spec: RenderSpec): string[] {
 }
 
 export async function renderHook(spec: RenderSpec, deps: RenderDeps): Promise<void> {
-  if (spec.hookLines.length !== spec.textPaths.length) {
-    throw new Error(`строк хука ${spec.hookLines.length}, а файлов для текста ${spec.textPaths.length}`);
+  if (!spec.overlayPath) {
+    if (spec.hookLines.length !== spec.textPaths.length) {
+      throw new Error(`строк хука ${spec.hookLines.length}, а файлов для текста ${spec.textPaths.length}`);
+    }
+    if (!(await deps.fontReadable(spec.fontPath))) {
+      throw new Error(`шрифт не читается: ${spec.fontPath}`);
+    }
+    await Promise.all(spec.hookLines.map((line, i) => deps.writeText(spec.textPaths[i], line)));
   }
-  if (!(await deps.fontReadable(spec.fontPath))) {
-    throw new Error(`шрифт не читается: ${spec.fontPath}`);
-  }
-  await Promise.all(spec.hookLines.map((line, i) => deps.writeText(spec.textPaths[i], line)));
   const { code, stderr } = await deps.runner(deps.ffmpegPath, ffmpegArgs(spec));
   if (code !== 0) throw new Error(`ffmpeg вышел с кодом ${code}: ${stderr.slice(-600)}`);
 }

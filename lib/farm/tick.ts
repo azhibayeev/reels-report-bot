@@ -72,8 +72,16 @@ export interface RenderTickDeps {
   triggerRender: (batchId: string) => Promise<void>;
 }
 
+// Три одинаковых сбоя подряд — это не невезение, а сломанная среда: битый
+// бинарник, отвалившееся хранилище, кончившаяся квота. Дальше молоть пачку
+// бессмысленно и вредно: каждый ролик стоит скачивания исходника и сообщения в
+// чат, а человек получает шестьдесят одинаковых писем вместо одного.
+export const FAILURE_STREAK_LIMIT = 3;
+
 export async function runRenderTick(batchId: string, deps: RenderTickDeps): Promise<void> {
   const startedAt = deps.now();
+  let streak = 0;
+  let lastError = "";
   for (;;) {
     if (deps.now() - startedAt > INVOCATION_BUDGET_MS - ITEM_RESERVE_MS) {
       await deps.triggerRender(batchId);
@@ -184,6 +192,23 @@ export async function runRenderTick(batchId: string, deps: RenderTickDeps): Prom
           }
         }
         await deps.saveItem({ ...item, status: "failed", renderingAt: null, error: message, videoUrl: null });
+
+        streak = message === lastError ? streak + 1 : 1;
+        lastError = message;
+        if (streak >= FAILURE_STREAK_LIMIT) {
+          try {
+            await deps.notify(
+              `Остановил сборку: ${streak} ролика подряд упали с одной ошибкой — ${message}\n\n` +
+                `Остальные ждут в очереди. Когда причина устранена, пните сборку командой /reels.`,
+              item.threadId,
+              item.chatId
+            );
+          } catch (notifyError) {
+            console.error("farm notify failed", item.itemId, notifyError);
+          }
+          return;
+        }
+
         try {
           await deps.notify(
             `Ролик ${item.index}/${item.total} не собрался: ${message}`,
