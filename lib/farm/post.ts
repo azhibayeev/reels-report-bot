@@ -3,6 +3,7 @@ import { deleteBlobQuiet, listItems, loadItem, saveItem } from "./store";
 import { escapeHtml } from "../format";
 import { sendMessage } from "../telegram";
 import { requireEnv } from "./tick";
+import { resolveFarmToken } from "./token-store";
 import { Item } from "./types";
 
 export interface PostDeps {
@@ -287,8 +288,10 @@ export async function runPostTick(deps: PostTickDeps, maxItems = 1): Promise<num
   return taken;
 }
 
-export function livePostTickDeps(): PostTickDeps {
-  const token = requireEnv("FARM_IG_TOKEN");
+// Асинхронна, потому что ключ теперь не из переменной окружения, а из
+// шифрованного хранилища: его надо прочитать и расшифровать.
+export async function livePostTickDeps(): Promise<PostTickDeps> {
+  const token = await resolveFarmToken();
   const igUserId = requireEnv("FARM_IG_ID");
   const publishDeps = { token, igUserId };
   return {

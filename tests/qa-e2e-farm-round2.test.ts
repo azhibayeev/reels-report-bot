@@ -388,7 +388,7 @@ describe("3. заливка: ссылка на рилс", () => {
     });
 
     const { livePostTickDeps, runPostTick } = await import("../lib/farm/post");
-    await runPostTick(livePostTickDeps(), 1);
+    await runPostTick(await livePostTickDeps(), 1);
     spy.mockRestore();
 
     const saved = item("i5");

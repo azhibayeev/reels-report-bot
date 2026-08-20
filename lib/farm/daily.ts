@@ -1,6 +1,7 @@
 import { escapeHtml } from "../format";
 import { sendMessage } from "../telegram";
 import { checkToken } from "./token";
+import { resolveFarmToken } from "./token-store";
 import { livePostTickDeps, runPostTick } from "./post";
 import { deleteBlobQuiet, isActive, itemPath, listAllBlobs, listItems, saveItem, SOURCES_PREFIX } from "./store";
 import { requireEnv, TAKEOVER_MS, triggerRender as triggerRenderChain } from "./tick";
@@ -284,14 +285,14 @@ export function liveDailyDeps(): DailyDeps {
       return blobs.map((b) => ({ url: b.url, uploadedAt: b.uploadedAt }));
     },
     triggerRender: triggerRenderChain,
-    checkToken: () => checkToken(requireEnv("FARM_IG_TOKEN")),
+    checkToken: async () => checkToken(await resolveFarmToken()),
     // Основной путь — внешний таймер по каждому слоту; суточный крон только
     // страхует его отказ. Один цикл публикации упирается в 240-секундный потолок
     // waitForContainer (CONTAINER_TIMEOUT_MS) при бюджете вызова в 300 с — второй
     // ролик туда не влезает, а остальные просроченные слоты подхватит следующий тик /api/farm/post.
     // Второй предохранитель — сам runDaily перед вызовом проверяет остаток бюджета
     // (DAILY_BUDGET_MS/CATCH_UP_RESERVE_MS) и пропускает добор, если уборка съела время.
-    catchUpDue: () => runPostTick(livePostTickDeps(), 1),
+    catchUpDue: async () => runPostTick(await livePostTickDeps(), 1),
     notify: (text, threadId) => sendMessage(escapeHtml(text), { thread: threadId }),
   };
 }

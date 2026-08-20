@@ -32,7 +32,9 @@ import {
 } from "../../../lib/farm/style";
 import { answerCallback } from "../../../lib/farm/telegram";
 import { requireEnv, triggerRender } from "../../../lib/farm/tick";
-import { checkToken } from "../../../lib/farm/token";
+import { checkToken, exchangeForLongLived, fetchPageToken } from "../../../lib/farm/token";
+import { installFarmToken } from "../../../lib/farm/token-setup";
+import { loadFarmToken, saveFarmToken } from "../../../lib/farm/token-store";
 import { formatTokenReport } from "../../../lib/farm/token-report";
 import { BATCH_TOKEN_TTL_MS, signBatchToken } from "../../../lib/farm/tokens";
 import { fetchAllReels, fetchFollowersCount, fetchViews } from "../../../lib/instagram";
@@ -79,7 +81,8 @@ const HELP =
   "/style верх|центр|низ — дефолтная позиция хука для будущих пачек (без аргумента — показать текущую)\n" +
   "/rhythm плотно|обычно|спокойно — регулярность выпуска (или своими числами: /rhythm 30 20)\n" +
   "/retry [N] — вернуть в сборку сбойные ролики (по умолчанию 3)\n" +
-  "/token — проверить ключи доступа Instagram: живы ли и хватает ли прав";
+  "/token — проверить ключи доступа Instagram: живы ли и хватает ли прав\n" +
+  "/token set <ключ> — обменять временный ключ из Explorer на бессрочный и сохранить";
 
 // Живой замер: список рилсов + актуальные просмотры. Снапшот НЕ сохраняем,
 // чтобы не сдвигать базу ежедневного отчёта.
@@ -217,10 +220,26 @@ async function handleFarmCommand(cmd: string, text: string, opts: SendOptions, r
     return true;
   }
   if (cmd === "/token") {
+    const arg = text.trim().split(/\s+/).slice(1);
+    if (arg[0] === "set") {
+      const result = await installFarmToken(arg[1] ?? "", {
+        appId: process.env.META_APP_ID,
+        appSecret: process.env.META_APP_SECRET,
+        igUserId: process.env.FARM_IG_ID,
+        exchangeForLongLived,
+        fetchPageToken,
+        checkToken,
+        saveToken: saveFarmToken,
+      });
+      await sendMessage(escapeHtml(result.message), opts);
+      return true;
+    }
     // Значения ключей наружу не отдаём никогда — только вердикт о них.
     const report = await formatTokenReport(
       [
-        { label: "Заливка роликов", env: "FARM_IG_TOKEN", value: process.env.FARM_IG_TOKEN },
+        // Показываем тот ключ, которым реально пользуется заливка: сохранённый
+        // важнее переменной окружения, и отчёт про env вводил бы в заблуждение.
+        { label: "Заливка роликов", env: "сохранён командой", value: await loadFarmToken() ?? process.env.FARM_IG_TOKEN },
         { label: "Отчёты @daristeppe", env: "IG_ACCESS_TOKEN", value: process.env.IG_ACCESS_TOKEN },
       ],
       { now: () => Date.now(), checkToken }

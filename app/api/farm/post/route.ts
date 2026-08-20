@@ -20,7 +20,11 @@ function handle(req: NextRequest): NextResponse {
   if (!checkKey(req)) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
-  after(() => runPostTick(livePostTickDeps(), 1).catch((error) => console.error("post tick failed", error)));
+  after(() =>
+    livePostTickDeps()
+      .then((deps) => runPostTick(deps, 1))
+      .catch((error) => console.error("post tick failed", error))
+  );
   return NextResponse.json({ ok: true }, { status: 202 });
 }
 

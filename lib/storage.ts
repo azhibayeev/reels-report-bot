@@ -118,11 +118,33 @@ function encryptionKey(): Buffer {
   return crypto.createHash("sha256").update(secret).digest();
 }
 
-export async function saveTokenState(state: TokenState, acc: AccountConfig): Promise<void> {
+/**
+ * Шифрование вынесено из saveTokenState/loadTokenState, чтобы им мог
+ * пользоваться и токен фермы: у него своя схема получения (обмен на токен
+ * Страницы), но требование то же — в публичный Blob класть только шифртекст.
+ * Своя вторая реализация тут была бы лишним местом для ошибки.
+ */
+export function encryptSecret(plain: string): string {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv("aes-256-gcm", encryptionKey(), iv);
-  const enc = Buffer.concat([cipher.update(JSON.stringify(state), "utf8"), cipher.final()]);
-  const payload = Buffer.concat([iv, cipher.getAuthTag(), enc]).toString("base64");
+  const enc = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
+  return Buffer.concat([iv, cipher.getAuthTag(), enc]).toString("base64");
+}
+
+/** Возвращает null на любой порче: битый шифртекст — это «нет значения». */
+export function decryptSecret(payload: string): string | null {
+  try {
+    const buf = Buffer.from(payload, "base64");
+    const decipher = crypto.createDecipheriv("aes-256-gcm", encryptionKey(), buf.subarray(0, 12));
+    decipher.setAuthTag(buf.subarray(12, 28));
+    return Buffer.concat([decipher.update(buf.subarray(28)), decipher.final()]).toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
+export async function saveTokenState(state: TokenState, acc: AccountConfig): Promise<void> {
+  const payload = encryptSecret(JSON.stringify(state));
   await put(acc.tokenPath, payload, {
     access: "public",
     contentType: "text/plain",
