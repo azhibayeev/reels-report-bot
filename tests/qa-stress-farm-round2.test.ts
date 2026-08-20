@@ -77,13 +77,25 @@ describe("A. апрув: перерисовать карточку не вышл
   });
 
   it("повторное нажатие по уже обработанному ролику не должно падать: выхода из ошибки иначе нет", async () => {
+    // Ролик из очереди отвечает без упоминания статуса и кнопок не теряет:
+    // рядом «Выкинуть», и она нужна, пока слот не наступил.
     const queued: Item = { ...base, status: "queued", scheduledAt: "2026-08-19T02:45:00.000Z" };
     const answerCallback = vi.fn(async () => {});
     const deps = approveDeps(queued, { dropKeyboard: tooOld(), answerCallback });
 
     await handleCallback({ id: "cb2", data: `a:${queued.itemId}`, chatId: queued.chatId }, deps);
 
-    expect(answerCallback).toHaveBeenCalledWith("cb2", "Уже обработано: queued");
+    expect(answerCallback).toHaveBeenCalledWith("cb2", "Уже обработано");
+  });
+
+  it("уже опубликованный ролик отвечает статусом и снимает кнопки, даже если Telegram против", async () => {
+    const posted: Item = { ...base, status: "posted", scheduledAt: "2026-08-19T02:45:00.000Z" };
+    const answerCallback = vi.fn(async () => {});
+    const deps = approveDeps(posted, { dropKeyboard: tooOld(), answerCallback });
+
+    await handleCallback({ id: "cb3", data: `a:${posted.itemId}`, chatId: posted.chatId }, deps);
+
+    expect(answerCallback).toHaveBeenCalledWith("cb3", "Уже обработано: posted");
   });
 
   it("отказ: ролик уже rejected и блоб удалён — подпись «выкинут» тоже обязана проставиться", async () => {
@@ -171,6 +183,12 @@ describe("B. /api/farm/start вызван дважды с теми же файл
         db.set(i.itemId, { ...i });
       },
       renderItem: async () => "https://blob/out/twin-1.mp4",
+      queueRendered: async (i) => {
+        const slot = new Date(NOW + 3_600_000).toISOString();
+        db.set(i.itemId, { ...i, status: "queued", scheduledAt: slot });
+        return slot;
+      },
+      formatSlot: (iso: string) => iso,
       sendVideoWithButtons: async () => 42,
       deleteBlobQuiet: async (url) => {
         deleted.push(url);
@@ -215,6 +233,8 @@ describe("D. Blob отдал 429 на записи статуса rendering", ()
         throw new Error("Blob put failed (429): rate limited");
       },
       renderItem: async () => "https://blob/out/p1.mp4",
+      queueRendered: async () => new Date(NOW + 3_600_000).toISOString(),
+      formatSlot: (iso: string) => iso,
       sendVideoWithButtons: async () => 42,
       deleteBlobQuiet: async () => {},
       notify,

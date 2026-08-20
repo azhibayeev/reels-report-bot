@@ -123,6 +123,12 @@ function renderDeps(store: ReturnType<typeof makeStore>, over: Partial<RenderTic
     now: () => Date.now(),
     listItems: store.listItems,
     saveItem: store.saveItem,
+    queueRendered: async (item) => {
+      const slot = new Date(Date.now() + 3_600_000).toISOString();
+      await store.saveItem({ ...item, status: "queued", scheduledAt: slot });
+      return slot;
+    },
+    formatSlot: (iso: string) => iso,
     renderItem: async (item) => {
       await new Promise<void>((r) => setTimeout(r, 5));
       return `https://blob/out/${item.itemId}.mp4`;
@@ -158,7 +164,7 @@ describe("C. два тика рендера на одну пачку", () => {
 });
 
 describe("D. Telegram отдал 429 после успешного рендера", () => {
-  it("готовый ролик не теряется: либо videoUrl сохранён, либо блоб удалён", async () => {
+  it("готовый ролик не теряется: 429 на карточке не отменяет очередь", async () => {
     const pending = { ...baseItem, status: "pending" as const, videoUrl: null, messageId: null, scheduledAt: null };
     const store = makeStore([pending]);
     const deleteBlobQuiet = vi.fn(async (_url: string) => {});
@@ -171,12 +177,15 @@ describe("D. Telegram отдал 429 после успешного рендер�
 
     await runRenderTick("b1", deps);
 
+    // Раньше исходов было два — запомнить ссылку или снести блоб, — потому что
+    // ролик считался потерянным. Теперь исход один: слот выдан до отправки, и
+    // ролик выходит по расписанию даже без карточки в чате.
     const saved = store.db.get("i1")!;
-    expect(saved.status).toBe("failed");
     const rendered = "https://blob/out/i1.mp4";
-    const remembered = saved.videoUrl === rendered;
-    const removed = deleteBlobQuiet.mock.calls.some((call) => call[0] === rendered);
-    expect(remembered || removed).toBe(true);
+    expect(saved.status).toBe("queued");
+    expect(saved.scheduledAt).not.toBeNull();
+    expect(saved.videoUrl).toBe(rendered);
+    expect(deleteBlobQuiet.mock.calls.some((call) => call[0] === rendered)).toBe(false);
   });
 });
 

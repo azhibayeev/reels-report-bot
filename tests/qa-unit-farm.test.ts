@@ -43,6 +43,8 @@ describe("C: runRenderTick после успешной отправки карт
       listItems: vi.fn(async () => []),
       saveItem: vi.fn(async () => {}),
       renderItem: vi.fn(async () => "https://out/v.mp4"),
+      queueRendered: vi.fn(async () => "2026-08-20T02:00:00.000Z"),
+      formatSlot: (iso: string) => iso,
       sendVideoWithButtons: vi.fn(async () => 555),
       deleteBlobQuiet: vi.fn(async () => {}),
       notify: vi.fn(async () => {}),

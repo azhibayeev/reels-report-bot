@@ -86,7 +86,11 @@ export interface RenderTickDeps {
     videoUrl: string;
     caption: string;
     itemId: string;
+    queued?: boolean;
   }) => Promise<number>;
+  /** Ставит собранный ролик в очередь и возвращает выданный слот. */
+  queueRendered: (item: Item) => Promise<string>;
+  formatSlot: (iso: string) => string;
   deleteBlobQuiet: (url: string) => Promise<void>;
   notify: (text: string, threadId: number | null, chatId?: number) => Promise<void>;
   triggerRender: (batchId: string) => Promise<void>;
@@ -171,15 +175,32 @@ export async function runRenderTick(batchId: string, deps: RenderTickDeps): Prom
       try {
         const videoUrl = await deps.renderItem(item);
         renderedUrl = videoUrl;
-        const caption = farmCaption(item.index, item.total, item.hook, item.caption);
-        const messageId = await deps.sendVideoWithButtons({
-          chatId: item.chatId,
-          threadId: item.threadId,
-          videoUrl,
-          caption,
-          itemId: item.itemId,
-        });
-        await deps.saveItem({ ...item, status: "review", videoUrl, messageId, renderingAt: null });
+
+        // Очередь ДО карточки, и это не мелочь порядка. Апрув руками отменён:
+        // карточка теперь уведомление, а не разрешение. Если бы слот выдавался
+        // после отправки, отвалившийся Telegram отменял бы публикацию ролика,
+        // который уже собран и ни в чём не виноват.
+        const rendered = { ...item, videoUrl, renderingAt: null };
+        const slot = await deps.queueRendered(rendered);
+
+        const caption =
+          `${farmCaption(item.index, item.total, item.hook, item.caption)}` +
+          `\n\n🗓 В очереди на ${deps.formatSlot(slot)}`;
+        // Отправка вынесена в свой try: её отказ не должен ни ронять пачку, ни
+        // трогать уже выданный слот — ролик выйдет и без карточки в чате.
+        try {
+          const messageId = await deps.sendVideoWithButtons({
+            chatId: item.chatId,
+            threadId: item.threadId,
+            videoUrl,
+            caption,
+            itemId: item.itemId,
+            queued: true,
+          });
+          await deps.saveItem({ ...rendered, status: "queued", scheduledAt: slot, messageId });
+        } catch (sendError) {
+          console.error("farm sendVideoWithButtons failed", item.itemId, sendError);
+        }
 
         // Раньше здесь задачи с тем же sourceUrl помечались сбойными: подложка
         // считалась личной, и повторная ссылка означала чужую пачку. Теперь

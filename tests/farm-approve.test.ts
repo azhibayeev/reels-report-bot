@@ -39,6 +39,36 @@ function makeDeps(items: Item[], overrides: Partial<ApproveDeps> = {}): { deps: 
   return { deps, items };
 }
 
+describe("handleEditReply: возврат в расписание", () => {
+  it("после правки описания ролик возвращается в очередь, а не выпадает из неё", async () => {
+    // При ручном апруве review был честной остановкой: человек всё равно жал
+    // «Залить». С автозаливкой это ловушка — поправил текст, и ролик тихо
+    // перестал быть запланированным, а сообщить об этом некому.
+    const editing: Item = {
+      ...base,
+      status: "editing",
+      editPromptId: 999,
+      scheduledAt: null,
+      videoUrl: "https://out/video.mp4",
+    };
+    const { deps, items } = makeDeps([editing]);
+
+    const handled = await handleEditReply(
+      { chatId: -1, threadId: null, text: "Новое описание", replyToMessageId: 999 },
+      deps
+    );
+
+    expect(handled).toBe(true);
+    expect(items[0].status).toBe("queued");
+    expect(items[0].scheduledAt).toBe(SLOT);
+    expect(items[0].caption).toBe("Новое описание");
+    // Новая карточка приходит без «Залить» и называет время.
+    expect(deps.sendVideoWithButtons).toHaveBeenCalledWith(
+      expect.objectContaining({ queued: true, caption: expect.stringContaining("слот:") })
+    );
+  });
+});
+
 describe("handleCallback", () => {
   it("ролик ещё собирается — карточка НЕ теряет кнопки", async () => {
     // Ловушка, на которую напоролись вживую. Карточка появляется в чате на
@@ -60,8 +90,32 @@ describe("handleCallback", () => {
     }
   });
 
-  it("а вот доведённый до конца ролик кнопки теряет — жать по нему больше нечего", async () => {
-    for (const status of ["queued", "posted", "rejected"] as const) {
+  it("ролик из очереди можно выкинуть: слот ещё не наступил", async () => {
+    // С отменой ручного апрува это единственная страховка. Ролик встаёт в
+    // очередь сам, и «Выкинуть» — единственный способ снять его до слота.
+    // Пока действовала проверка «только review», кнопка на такой карточке
+    // отвечала «Уже обработано: queued» и снимала сама себя.
+    const { deps, items } = makeDeps([
+      { ...base, status: "queued", scheduledAt: SLOT, videoUrl: "https://out/video.mp4" },
+    ]);
+
+    await handleCallback({ id: "cb1", data: "r:i1", chatId: -1 }, deps);
+
+    expect(items[0].status).toBe("rejected");
+    expect(deps.deleteBlobQuiet).toHaveBeenCalledWith("https://out/video.mp4");
+    expect(deps.answerCallback).toHaveBeenCalledWith("cb1", "Выкинул");
+  });
+
+  it("описание у ролика из очереди тоже правится: публикация ещё впереди", async () => {
+    const { deps } = makeDeps([{ ...base, status: "queued", scheduledAt: SLOT }]);
+
+    await handleCallback({ id: "cb1", data: "e:i1", chatId: -1 }, deps);
+
+    expect(deps.askForReply).toHaveBeenCalled();
+  });
+
+  it("а вот уже улетевший в Instagram ролик кнопки теряет — жать по нему нечего", async () => {
+    for (const status of ["posting", "posted", "rejected"] as const) {
       const { deps } = makeDeps([{ ...base, status }]);
       await handleCallback({ id: "cb1", data: "a:i1", chatId: -1 }, deps);
 
@@ -105,11 +159,12 @@ describe("handleCallback", () => {
     expect(deps.saveItem).not.toHaveBeenCalled();
   });
 
-  it("уже не review — сообщает статус, снимает кнопки, статус НЕ трогает", async () => {
-    const { deps, items } = makeDeps([{ ...base, status: "queued" }]);
+  it("«Залить» по ролику из очереди сообщает, что он уже там — но кнопки оставляет", async () => {
+    // Кнопки снимать нельзя: рядом «Выкинуть», и она ещё нужна — слот впереди.
+    const { deps, items } = makeDeps([{ ...base, status: "queued", scheduledAt: SLOT }]);
     await handleCallback({ id: "cb1", data: "a:i1", chatId: -1 }, deps);
-    expect(deps.answerCallback).toHaveBeenCalledWith("cb1", "Уже обработано: queued");
-    expect(deps.dropKeyboard).toHaveBeenCalledWith(base.chatId, base.messageId);
+    expect(deps.answerCallback).toHaveBeenCalledWith("cb1", "Уже обработано");
+    expect(deps.dropKeyboard).not.toHaveBeenCalled();
     expect(deps.saveItem).not.toHaveBeenCalled();
     expect(items[0].status).toBe("queued");
   });
@@ -244,7 +299,7 @@ describe("handleEditReply", () => {
     expect(deps.saveItem).not.toHaveBeenCalled();
   });
 
-  it("валидный текст — меняет описание, возвращает review, шлёт новую карточку", async () => {
+  it("валидный текст — меняет описание, возвращает в очередь, шлёт новую карточку", async () => {
     const { deps, items } = makeDeps([{ ...base, status: "editing", editPromptId: 999 }]);
 
     const result = await handleEditReply(
@@ -254,7 +309,8 @@ describe("handleEditReply", () => {
 
     expect(result).toBe(true);
     const saved = items.find((i) => i.itemId === "i1")!;
-    expect(saved.status).toBe("review");
+    expect(saved.status).toBe("queued");
+    expect(saved.scheduledAt).toBe(SLOT);
     expect(saved.caption).toBe("Новое описание ролика");
     expect(saved.editPromptId).toBeNull();
     expect(saved.messageId).toBe(888);
@@ -262,8 +318,9 @@ describe("handleEditReply", () => {
       chatId: base.chatId,
       threadId: base.threadId,
       videoUrl: base.videoUrl,
-      caption: farmCaption(base.index, base.total, base.hook, "Новое описание ролика"),
+      caption: `${farmCaption(base.index, base.total, base.hook, "Новое описание ролика")}\n\n🗓 В очереди на слот:${SLOT}`,
       itemId: base.itemId,
+      queued: true,
     });
   });
 });

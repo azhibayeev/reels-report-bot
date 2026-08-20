@@ -10,6 +10,7 @@ const base: Item = {
   renderingAt: null, postingAt: null, scheduledAt: null,
   igMediaId: null, permalink: null, error: null, createdAt: "2026-08-19T00:00:00.000Z",
 };
+const SLOT = "2026-08-20T02:00:00.000Z";
 const NOW = Date.parse("2026-08-19T01:00:00.000Z");
 
 describe("isAbandoned", () => {
@@ -68,6 +69,14 @@ function makeDeps(items: Item[], overrides: Partial<RenderTickDeps> = {}): { dep
       else items[idx] = item;
     },
     renderItem: vi.fn(async () => "https://out/video.mp4"),
+    queueRendered: vi.fn(async (item: Item) => {
+      const idx = items.findIndex((i) => i.itemId === item.itemId);
+      const queued = { ...item, status: "queued" as const, scheduledAt: SLOT };
+      if (idx === -1) items.push(queued);
+      else items[idx] = queued;
+      return SLOT;
+    }),
+    formatSlot: (iso: string) => `слот:${iso}`,
     sendVideoWithButtons: vi.fn(async () => 555),
     deleteBlobQuiet: vi.fn(async () => {}),
     notify: vi.fn(async () => {}),
@@ -78,6 +87,45 @@ function makeDeps(items: Item[], overrides: Partial<RenderTickDeps> = {}): { dep
 }
 
 describe("runRenderTick", () => {
+  it("собранный ролик встаёт в очередь сам, без нажатия «Залить»", async () => {
+    // Пачка — это шестьдесят роликов, и шестьдесят подтверждений превращают
+    // ферму в ручную работу. Ролики уходят в Trial Reels, где их видят только
+    // не-подписчики, поэтому апрув руками отменён. Страховка осталась в
+    // карточке: пока слот не наступил, ролик можно выкинуть кнопкой.
+    const item = { ...base, itemId: "i1" };
+    const { deps, items } = makeDeps([item]);
+
+    await runRenderTick("b1", deps);
+
+    const saved = items.find((i) => i.itemId === "i1")!;
+    expect(saved.status).toBe("queued");
+    expect(saved.scheduledAt).toBe(SLOT);
+    expect(saved.videoUrl).toBe("https://out/video.mp4");
+    expect(saved.messageId).toBe(555);
+    // Карточка приходит без «Залить» и сообщает выданное время.
+    expect(deps.sendVideoWithButtons).toHaveBeenCalledWith(
+      expect.objectContaining({ queued: true, caption: expect.stringContaining("слот:") })
+    );
+  });
+
+  it("слот выдан ДО отправки карточки: отвалившийся Telegram не отменяет публикацию", async () => {
+    // Порядок принципиален. Карточка — уведомление, а не разрешение: если
+    // Telegram недоступен, ролик всё равно обязан выйти по расписанию.
+    const item = { ...base, itemId: "i1" };
+    const { deps, items } = makeDeps([item], {
+      sendVideoWithButtons: vi.fn(async () => {
+        throw new Error("telegram 502");
+      }),
+    });
+
+    await runRenderTick("b1", deps);
+
+    const saved = items.find((i) => i.itemId === "i1")!;
+    expect(saved.status).toBe("queued");
+    expect(saved.scheduledAt).toBe(SLOT);
+    expect(saved.messageId).toBeNull();
+  });
+
   it("подложку не удаляем, пока на ней висит сбойный ролик: иначе /retry нечем пересобирать", async () => {
     // Так и вышло на проде. Подложки раздаются по кругу, одна на десяток хуков.
     // Пока пачка молола, часть роликов упала; когда последний pending
@@ -127,14 +175,14 @@ describe("runRenderTick", () => {
     expect(deps.deleteBlobQuiet).toHaveBeenCalledWith(base.sourceUrl);
   });
 
-  it("успешный ролик: review + videoUrl + messageId, исходник удалён, triggerRender не звали", async () => {
+  it("успешный ролик: очередь + videoUrl + messageId, исходник удалён, triggerRender не звали", async () => {
     const item = { ...base, itemId: "i1" };
     const { deps, items } = makeDeps([item]);
 
     await runRenderTick("b1", deps);
 
     const saved = items.find((i) => i.itemId === "i1")!;
-    expect(saved.status).toBe("review");
+    expect(saved.status).toBe("queued");
     expect(saved.videoUrl).toBe("https://out/video.mp4");
     expect(saved.messageId).toBe(555);
     expect(saved.renderingAt).toBeNull();
@@ -145,7 +193,7 @@ describe("runRenderTick", () => {
         threadId: item.threadId,
         itemId: item.itemId,
         videoUrl: "https://out/video.mp4",
-        caption: farmCaption(1, 3, "Хук", "Описание"),
+        caption: `${farmCaption(1, 3, "Хук", "Описание")}\n\n🗓 В очереди на слот:${SLOT}`,
       })
     );
     expect(deps.triggerRender).not.toHaveBeenCalled();

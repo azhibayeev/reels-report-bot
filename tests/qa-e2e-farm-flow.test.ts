@@ -52,6 +52,7 @@ import { handleCallback, handleEditReply, ApproveDeps } from "../lib/farm/approv
 import { createTrialContainer, fetchPermalink, publishContainer, waitForContainer } from "../lib/farm/instagram";
 import { parseBlocks } from "../lib/farm/parse";
 import { PostTickDeps, postOne, runPostTick } from "../lib/farm/post";
+import { queueRendered } from "../lib/farm/queue";
 import { nextFreeSlot, DEFAULT_SLOTS } from "../lib/farm/slots";
 import { startBatch } from "../lib/farm/start";
 import { deleteBlobQuiet, listItems, loadItem, saveBatch, saveItem } from "../lib/farm/store";
@@ -162,6 +163,14 @@ function renderDeps(over: Partial<RenderTickDeps> = {}): RenderTickDeps {
     listItems,
     saveItem,
     renderItem: fakeRenderItem,
+    queueRendered: (item) =>
+      queueRendered(item, {
+        now: () => store.clock.now,
+        listItems,
+        saveItem,
+        nextFreeSlot: (taken, nowMs) => nextFreeSlot(taken, nowMs, DEFAULT_SLOTS),
+      }),
+    formatSlot: (iso: string) => iso,
     sendVideoWithButtons,
     deleteBlobQuiet,
     notify: async (text: string) => {
@@ -240,16 +249,18 @@ describe("сквозной путь: загрузка → рендер → ап�
 
     await runRenderTick(batchId, renderDeps());
 
+    // Апрув руками отменён: собранный ролик встаёт в очередь сам, и каждому
+    // достаётся свой слот — 09:00 и 09:45 по Джакарте.
     const afterRender = await listItems();
-    expect(afterRender.map((i) => i.status)).toEqual(["review", "review"]);
+    expect(afterRender.map((i) => i.status)).toEqual(["queued", "queued"]);
+    expect(afterRender.map((i) => i.scheduledAt).sort()).toEqual([
+      "2026-08-19T02:00:00.000Z",
+      "2026-08-19T02:45:00.000Z",
+    ]);
     expect(tg.filter((c) => c.method === "sendVideo")).toHaveLength(2);
     expect([...store.files.keys()].filter((k) => k.startsWith("farm/sources/"))).toEqual([]);
 
     const first = afterRender.find((i) => i.index === 1)!;
-    // 08:30 по Джакарте: слот 09:00 ещё впереди.
-    store.clock.now = Date.parse("2026-08-19T01:30:00.000Z");
-    await handleCallback({ id: "cb1", data: `a:${first.itemId}`, chatId: CHAT }, approveDeps());
-
     const queued = await loadItem(first.itemId);
     expect(queued?.status).toBe("queued");
     expect(queued?.scheduledAt).toBe("2026-08-19T02:00:00.000Z");
@@ -277,7 +288,7 @@ describe("сквозной путь: загрузка → рендер → ап�
     expect(store.files.has(`farm/items/${first.itemId}.json`)).toBe(false);
   });
 
-  it("правка описания возвращает ролик в review и уходит в IG новым текстом", async () => {
+  it("правка описания возвращает ролик в очередь и уходит в IG новым текстом", async () => {
     const files = [uploadSource("a.mp4")];
     const batchId = await newBatch("Хук один\nСтарое описание", files);
     await runRenderTick(batchId, renderDeps());
@@ -293,12 +304,13 @@ describe("сквозной путь: загрузка → рендер → ап�
       approveDeps()
     );
     expect(handled).toBe(true);
+    // Возврат именно в очередь: при автозаливке review стал бы тупиком, из
+    // которого ролик уже никто не достанет.
     const back = await loadItem(item.itemId);
-    expect(back?.status).toBe("review");
+    expect(back?.status).toBe("queued");
+    expect(back?.scheduledAt).toBe("2026-08-19T02:00:00.000Z");
     expect(back?.caption).toBe("Новое описание");
 
-    store.clock.now = Date.parse("2026-08-19T01:30:00.000Z");
-    await handleCallback({ id: "cb2", data: `a:${item.itemId}`, chatId: CHAT }, approveDeps());
     store.clock.now = Date.parse("2026-08-19T02:00:00.000Z");
     await runPostTick(postDeps(), 1);
 
@@ -329,7 +341,11 @@ async function dailyDeps(over: Partial<DailyDeps> = {}): Promise<DailyDeps> {
 }
 
 describe("разрывы между слоями", () => {
-  it("после отвала Telegram на sendVideo готовый ролик не должен остаться сиротой в Blob", async () => {
+  it("отвал Telegram на sendVideo не отменяет публикацию: ролик остаётся в очереди", async () => {
+    // Прежде карточка была разрешением, и не ушедшая карточка означала
+    // потерянный ролик: его помечали failed и тут же сносили видео. С отменой
+    // ручного апрува карточка стала уведомлением — слот выдан раньше отправки,
+    // и недоступный мессенджер не повод срывать назначенную публикацию.
     const files = [uploadSource("a.mp4")];
     const batchId = await newBatch("Хук один\nОписание", files);
     tgFail = (method) => (method === "sendVideo" ? "Bad Request: video is too big" : null);
@@ -337,17 +353,18 @@ describe("разрывы между слоями", () => {
     await runRenderTick(batchId, renderDeps());
 
     const [item] = await listItems();
-    expect(item.status).toBe("failed");
-    expect(item.videoUrl).toBeNull();
-    const outPath = `farm/out/${item.itemId}.mp4`;
+    expect(item.status).toBe("queued");
+    expect(item.scheduledAt).toBe("2026-08-19T02:00:00.000Z");
+    expect(item.videoUrl).not.toBeNull();
+    // Карточки в чате нет, а ролик есть — именно так и задумано.
+    expect(item.messageId).toBeNull();
+    expect(store.files.has(`farm/out/${item.itemId}.mp4`)).toBe(true);
 
-    // Уборка через 4 дня сносит запись о задаче; готовый ролик на 8 МБ обязан
-    // уйти вместе с ней, иначе он остаётся в Blob навсегда — ссылки на него нет
-    // ни в одной задаче, а listSources в daily смотрит только farm/sources/.
-    store.clock.now = Date.parse("2026-08-23T02:00:00.000Z");
-    await runDaily(await dailyDeps());
-    expect(store.files.has(`farm/items/${item.itemId}.json`)).toBe(false);
-    expect(store.files.has(outPath)).toBe(false);
+    // И он действительно выходит в свой слот, без всякого участия человека.
+    store.clock.now = Date.parse("2026-08-19T02:00:00.000Z");
+    tgFail = () => null;
+    expect(await runPostTick(postDeps(), 1)).toBe(1);
+    expect((await loadItem(item.itemId))?.status).toBe("posted");
   });
 
   it("два тика заливки, идущие внахлёст, публикуют один ролик дважды", async () => {
@@ -408,7 +425,12 @@ describe("разрывы между слоями", () => {
     const files = [uploadSource("a.mp4")];
     const batchId = await newBatch("Хук один\nОписание", files);
     await runRenderTick(batchId, renderDeps());
-    const [item] = await listItems();
+    const [rendered] = await listItems();
+    // Ролик кладём обратно в review руками: сам он туда больше не попадает —
+    // апрув отменён, — а проверяем мы уборку просроченного review, и она
+    // остаётся нужной для роликов, снятых с очереди правкой описания.
+    await saveItem({ ...rendered, status: "review", scheduledAt: null });
+    const item = rendered;
 
     // Восемь дней спустя: review истёк.
     store.clock.now = Date.parse("2026-08-27T02:00:00.000Z");

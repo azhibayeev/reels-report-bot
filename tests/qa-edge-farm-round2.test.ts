@@ -167,14 +167,18 @@ describe("J. откат startBatch оставляет уже созданные 
 });
 
 // ---------------------------------------------------------------------------
-// L. Собранный ролик, который не удалось отправить в Telegram, теперь не
-//    остаётся в Blob навсегда: runRenderTick удаляет его сам, по url,
-//    запомненному в локальной переменной сразу после renderItem.
+// L. Отказ Telegram при отправке карточки больше не отменяет ролик.
+//    Раньше карточка была разрешением на публикацию, и не ушедшая карточка
+//    означала потерянный ролик — его видео тут же удаляли из farm/out/.
+//    С отменой ручного апрува карточка стала уведомлением: слот выдан ДО
+//    отправки, и удалять видео теперь значило бы сорвать уже назначенную
+//    публикацию из-за недоступного мессенджера.
 // ---------------------------------------------------------------------------
-describe("L. отказ sendVideo оставляет собранный ролик в Blob навсегда", () => {
-  it("исправлено: отказ sendVideo удаляет уже собранный ролик из farm/out/", async () => {
+describe("L. отказ sendVideo не должен отменять уже назначенную публикацию", () => {
+  it("ролик остаётся в очереди со своим слотом, видео не удаляется", async () => {
     const item: Item = { ...base, itemId: "i9", status: "pending", videoUrl: null, messageId: null };
     const outUrl = "https://blob.public.blob.vercel-storage.com/farm/out/i9.mp4";
+    const SLOT = "2026-08-20T02:00:00.000Z";
 
     const saved: Item[] = [];
     const deleted: string[] = [];
@@ -188,6 +192,13 @@ describe("L. отказ sendVideo оставляет собранный роли
         listed = [i];
       },
       renderItem: async () => outUrl,
+      queueRendered: async (i: Item) => {
+        const queued = { ...i, status: "queued" as const, scheduledAt: SLOT };
+        saved.push(queued);
+        listed = [queued];
+        return SLOT;
+      },
+      formatSlot: (iso: string) => iso,
       // Ролик длиннее ~40 секунд весит больше 20 МБ, а по URL Telegram принимает
       // максимум 20 МБ — отказ здесь штатный, а не экзотический.
       sendVideoWithButtons: async () => {
@@ -201,25 +212,15 @@ describe("L. отказ sendVideo оставляет собранный роли
     });
 
     const last = saved[saved.length - 1];
-    expect(last.status).toBe("failed");
-    // Ссылка на собранный ролик в самой задаче не хранится — вместо этого его
-    // удаляют сразу, за счёт локальной переменной, куда renderItem вернул url.
-    expect(last.videoUrl).toBeNull();
-    expect(deleted).toContain(outUrl);
-
-    // Уборке сироту искать уже не нужно: ролик удалён сразу в момент отказа, а
-    // не оставлен висеть в надежде на purge (который всё равно смотрит только
-    // на item.videoUrl/item.sourceUrl, а не листает farm/out/).
-    const { purge } = classifyForCleanup(
-      [{ ...last, createdAt: "2026-08-01T00:00:00.000Z" }],
-      Date.parse("2026-08-19T00:00:00.000Z")
-    );
-    expect(purge).toHaveLength(1);
-    expect(purge[0].videoUrl).toBeNull();
+    expect(last.status).toBe("queued");
+    expect(last.scheduledAt).toBe(SLOT);
+    expect(last.videoUrl).toBe(outUrl);
+    // Именно это раньше и ломало ролик: собранное видео удаляли, а публиковать
+    // потом было нечего.
+    expect(deleted).not.toContain(outUrl);
   });
 });
 
-// ---------------------------------------------------------------------------
 // K. Номер блока в ошибке валидации сдвигается, если раньше был битый блок.
 // ---------------------------------------------------------------------------
 describe("K. «блок N» в ошибке хука указывает не на тот блок", () => {

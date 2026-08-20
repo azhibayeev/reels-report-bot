@@ -12,6 +12,7 @@ import {
   farmCaption,
   sendVideoWithButtons,
 } from "./telegram";
+import { queueRendered, takenSlots, withSlotLock } from "./queue";
 import { Item } from "./types";
 
 export interface ApproveDeps {
@@ -31,6 +32,8 @@ export interface ApproveDeps {
     videoUrl: string;
     caption: string;
     itemId: string;
+    /** Ролик уже в очереди — тогда без «Залить». */
+    queued?: boolean;
   }) => Promise<number>;
   notify: (text: string, threadId: number | null) => Promise<void>;
   formatSlot: (iso: string) => string;
@@ -57,9 +60,6 @@ export function liveApproveDeps(rhythm?: { minutes: number; perDay: number } | n
   };
 }
 
-// Статусы, чьи слоты уже кому-то принадлежат: их нельзя выдать второй раз.
-const SLOT_TAKEN_STATUSES = new Set(["queued", "posting", "posted"]);
-
 // Замок сериализует критическую секцию апрува («прочитать занятые слоты →
 // выбрать свободный → записать queued») в пределах ЭТОГО инстанса: без него
 // два параллельных апрува оба читают listItems() до того, как первый запишет
@@ -68,19 +68,6 @@ const SLOT_TAKEN_STATUSES = new Set(["queued", "posting", "posted"]);
 // не закрывает, там единственная защита — то же перечитывание после записи.
 let approveChain: Promise<void> = Promise.resolve();
 
-async function withApproveLock<T>(fn: () => Promise<T>): Promise<T> {
-  const previous = approveChain.catch(() => {});
-  let release: () => void = () => {};
-  approveChain = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await previous;
-  try {
-    return await fn();
-  } finally {
-    release();
-  }
-}
 
 // Косметика Telegram (снятие клавиатуры, перерисовка подписи, ответ на
 // callback) не должна ронять апрув/реджект: сообщение бота старше 48 часов
@@ -93,6 +80,10 @@ async function cosmetic(action: () => Promise<void>, label: string, itemId: stri
     console.error(`farm ${label} failed`, itemId, error);
   }
 }
+
+// Статусы, на которых карточка ещё что-то решает: ролик не улетел в Instagram,
+// значит его можно выкинуть или переписать ему описание.
+const REVOCABLE_STATUSES = new Set<string>(["review", "queued", "editing"]);
 
 export async function handleCallback(
   cb: { id: string; data: string; chatId: number },
@@ -129,7 +120,11 @@ export async function handleCallback(
     return;
   }
 
-  if (item.status !== "review") {
+  // Пока слот не наступил, ролик ещё можно снять и поправить — а с отменой
+  // ручного апрува он попадает в очередь сразу после сборки, минуя review.
+  // Проверка «только review» оставила бы такие карточки без действующих
+  // кнопок: единственная страховка от неудачного ролика перестала бы работать.
+  if (!REVOCABLE_STATUSES.has(item.status)) {
     // Листать чат вверх и жать повторно — норма: не трогаем статус и не пишем в стор.
     console.warn("farm approve: карточка уже отработана", item.itemId, item.status);
     await cosmetic(() => deps.answerCallback(cb.id, `Уже обработано: ${item.status}`), "answerCallback", item.itemId);
@@ -141,7 +136,7 @@ export async function handleCallback(
   }
 
   if (parsed.action === "approve") {
-    const slot = await withApproveLock(async () => {
+    const slot = await withSlotLock(async () => {
       // Перечитываем задачу УЖЕ внутри замка: item выше захвачен ДО входа в
       // критическую секцию, и при двух нажатиях подряд по одной карточке
       // оба вызова handleCallback проходят проверку `status !== "review"` с
@@ -153,11 +148,7 @@ export async function handleCallback(
       // надо знать) и задачу уже обработал сосед по нажатию (штатное дело).
       if (!fresh) return "gone";
       if (fresh.status !== "review") return "taken";
-      const taken = (await deps.listItems())
-        .filter((i) => SLOT_TAKEN_STATUSES.has(i.status))
-        .map((i) => i.scheduledAt)
-        .filter((s): s is string => s !== null);
-      const chosen = deps.nextFreeSlot(taken, deps.now());
+      const chosen = deps.nextFreeSlot(takenSlots(await deps.listItems()), deps.now());
       await deps.saveItem({ ...fresh, status: "queued", scheduledAt: chosen });
       return chosen;
     });
@@ -246,21 +237,29 @@ export async function handleEditReply(
     return true;
   }
 
-  // Сохраняем новое описание ДО отправки карточки: раньше сначала уходила
-  // карточка с живыми кнопками, а запись падала следом — ролик оставался
-  // editing с висящей в чате кнопкой, которая отвечает «Уже обработано» и
-  // запирает ролик до семисуточной уборки. Если саму отправку не удастся
-  // выполнить дальше, ошибку пробрасываем — текст к этому моменту уже цел.
-  await deps.saveItem({ ...item, caption: text, status: "review", editPromptId: null });
+  // Возвращаем в очередь, а не в review. При ручном апруве review был честной
+  // остановкой: человек всё равно жал «Залить». С автозаливкой это ловушка —
+  // поправил описание, и ролик тихо перестал быть запланированным.
+  //
+  // Слот берём заново, а не возвращаем прежний: пока ролик лежал в editing, его
+  // время было свободным и могло уйти соседу. queueRendered под общим замком
+  // выдаст ближайшее незанятое.
+  //
+  // Запись идёт ДО отправки карточки: раньше сначала уходила карточка с живыми
+  // кнопками, а запись падала следом — ролик оставался editing с висящей в чате
+  // кнопкой, которая запирала его до семисуточной уборки.
+  const edited = { ...item, caption: text, editPromptId: null };
+  const slot = await queueRendered(edited, deps);
 
   const messageId = await deps.sendVideoWithButtons({
     chatId: item.chatId,
     threadId: item.threadId,
     // При статусе editing ролик уже прошёл рендер, значит videoUrl всегда заполнен.
     videoUrl: item.videoUrl as string,
-    caption: farmCaption(item.index, item.total, item.hook, text),
+    caption: `${farmCaption(item.index, item.total, item.hook, text)}\n\n🗓 В очереди на ${deps.formatSlot(slot)}`,
     itemId: item.itemId,
+    queued: true,
   });
-  await deps.saveItem({ ...item, caption: text, status: "review", editPromptId: null, messageId });
+  await deps.saveItem({ ...edited, status: "queued", scheduledAt: slot, messageId });
   return true;
 }

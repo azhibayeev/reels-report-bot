@@ -37,6 +37,26 @@ export function approvalKeyboard(itemId: string): Keyboard {
   };
 }
 
+/**
+ * Клавиатура ролика, который уже стоит в очереди. «Залить» тут нет: ролик
+ * попадает в очередь сам, сразу после сборки. Шестьдесят подтверждений на пачку
+ * — это ручная работа, ради отмены которой ферма и затевалась, а уходят ролики
+ * в Trial Reels, то есть видны только не-подписчикам.
+ *
+ * Обе оставшиеся кнопки работают до наступления слота и служат страховкой:
+ * неудачный ролик можно снять, описание — переписать.
+ */
+export function queuedKeyboard(itemId: string): Keyboard {
+  return {
+    inline_keyboard: [
+      [
+        { text: "❌ Выкинуть", callback_data: `r:${itemId}` },
+        { text: "✏️ Текст", callback_data: `e:${itemId}` },
+      ],
+    ],
+  };
+}
+
 // Подпись к видео в Telegram ограничена 1024 знаками против 2200 в Instagram,
 // поэтому описание здесь урезано: полный текст всё равно уходит в публикацию.
 export function farmCaption(index: number, total: number, hook: string, caption: string): string {
@@ -50,6 +70,8 @@ export async function sendVideoWithButtons(args: {
   videoUrl: string;
   caption: string;
   itemId: string;
+  /** Ролик уже в очереди — тогда без «Залить». */
+  queued?: boolean;
 }): Promise<number> {
   const result = await call("sendVideo", {
     chat_id: args.chatId,
@@ -57,7 +79,7 @@ export async function sendVideoWithButtons(args: {
     video: args.videoUrl,
     caption: args.caption,
     supports_streaming: true,
-    reply_markup: approvalKeyboard(args.itemId),
+    reply_markup: args.queued ? queuedKeyboard(args.itemId) : approvalKeyboard(args.itemId),
   });
   return (result.result as { message_id: number }).message_id;
 }
