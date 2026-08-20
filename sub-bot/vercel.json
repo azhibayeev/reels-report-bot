@@ -1,4 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "crons": [{ "path": "/api/cleanup", "schedule": "0 4 * * *" }]
+  "crons": [{ "path": "/api/cleanup", "schedule": "0 4 * * *" }],
+  "functions": {
+    "app/api/sub/render/route.ts": { "memory": 4096, "maxDuration": 800 }
+  }
 }
