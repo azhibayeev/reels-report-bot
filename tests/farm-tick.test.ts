@@ -78,6 +78,55 @@ function makeDeps(items: Item[], overrides: Partial<RenderTickDeps> = {}): { dep
 }
 
 describe("runRenderTick", () => {
+  it("подложку не удаляем, пока на ней висит сбойный ролик: иначе /retry нечем пересобирать", async () => {
+    // Так и вышло на проде. Подложки раздаются по кругу, одна на десяток хуков.
+    // Пока пачка молола, часть роликов упала; когда последний pending
+    // дорендерился, исходники снесло — а следом /retry вернул тридцать четыре
+    // задачи, которые тут же легли с 404 на удалённой подложке. Доделать пачку
+    // означало убить возможность её пересобрать.
+    const ok = { ...base, itemId: "i1", index: 1, status: "pending" as const };
+    const broken = {
+      ...base,
+      itemId: "i2",
+      index: 2,
+      status: "failed" as const,
+      videoUrl: null,
+      error: "ffmpeg вышел с кодом 8",
+    };
+    const { deps } = makeDeps([ok, broken]);
+
+    await runRenderTick("b1", deps);
+
+    expect(deps.deleteBlobQuiet).not.toHaveBeenCalledWith(base.sourceUrl);
+  });
+
+  it("а вот собранного соседа подложка уже не держит: он своё видео получил", async () => {
+    const ok = { ...base, itemId: "i1", index: 1, status: "pending" as const };
+    const done = { ...base, itemId: "i2", index: 2, status: "review" as const, videoUrl: "https://out/2.mp4" };
+    const { deps } = makeDeps([ok, done]);
+
+    await runRenderTick("b1", deps);
+
+    expect(deps.deleteBlobQuiet).toHaveBeenCalledWith(base.sourceUrl);
+  });
+
+  it("сбойный на публикации подложку не держит: видео у него есть, пересобирать нечего", async () => {
+    const ok = { ...base, itemId: "i1", index: 1, status: "pending" as const };
+    const postFail = {
+      ...base,
+      itemId: "i2",
+      index: 2,
+      status: "failed" as const,
+      videoUrl: "https://out/2.mp4",
+      error: "IG отбраковал ролик",
+    };
+    const { deps } = makeDeps([ok, postFail]);
+
+    await runRenderTick("b1", deps);
+
+    expect(deps.deleteBlobQuiet).toHaveBeenCalledWith(base.sourceUrl);
+  });
+
   it("успешный ролик: review + videoUrl + messageId, исходник удалён, triggerRender не звали", async () => {
     const item = { ...base, itemId: "i1" };
     const { deps, items } = makeDeps([item]);

@@ -54,11 +54,26 @@ export function pickNext(items: Item[], batchId: string, nowMs: number): Item | 
 // там спасает только TAKEOVER_MS.
 const renderingNow = new Set<string>();
 
-// Статусы, которым исходник ещё нужен: только эти задачи-двойники реально
-// упадут при следующем тике на удалённом sourceUrl. Ролик, уже прошедший
-// рендер (review/queued/editing/posting/posted), свой videoUrl давно получил
-// и трогать его из-за чужого sourceUrl незачем.
-const NEEDS_SOURCE_STATUSES = new Set<string>(["pending", "rendering"]);
+/**
+ * Кому исходник ещё нужен. Очевидные — ждущие и рендерящиеся. Неочевидный, и
+ * ровно на нём мы обожглись: сбойный ролик, до видео так и не дошедший. Его
+ * возвращает в работу /retry, и без подложки возвращать некуда.
+ *
+ * На проде это стоило тридцати четырёх роликов. Подложки раздаются по кругу,
+ * одна на десяток хуков; пока пачка молола, часть роликов упала. Когда
+ * дорендерился последний ждущий, «ждущих не осталось» стало правдой — и
+ * исходники снесло. Следом /retry вернул сбойные в очередь, и все они легли с
+ * 404. Доделать пачку буквально означало лишить её возможности пересобраться.
+ *
+ * Провалившийся на публикации сюда не попадает: видео у него есть, рендерить
+ * заново нечего. Держать подложку вечно тоже не выйдет — суточная уборка
+ * сносит ничьи исходники, а сами сбойные задачи чистит через трое суток
+ * (PURGE_AFTER_MS в lib/farm/daily.ts).
+ */
+function needsSource(item: Item): boolean {
+  if (item.status === "pending" || item.status === "rendering") return true;
+  return item.status === "failed" && !item.videoUrl;
+}
 
 export interface RenderTickDeps {
   now: () => number;
@@ -178,10 +193,7 @@ export async function runRenderTick(batchId: string, deps: RenderTickDeps): Prom
         // Blob на Hobby при превышении отключает хранилище на 30 дней, поэтому
         // держать лишнее тоже нельзя: удаляем, когда ждущих не осталось.
         const stillNeeded = (await deps.listItems()).some(
-          (other) =>
-            other.itemId !== item.itemId &&
-            other.sourceUrl === item.sourceUrl &&
-            (other.status === "pending" || other.status === "rendering")
+          (other) => other.itemId !== item.itemId && other.sourceUrl === item.sourceUrl && needsSource(other)
         );
         if (!stillNeeded) await deps.deleteBlobQuiet(item.sourceUrl);
       } catch (error) {
