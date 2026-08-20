@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { startBatch, StartDeps, validateBatch } from "../lib/farm/start";
 import { BATCHES_PREFIX, itemPath } from "../lib/farm/store";
 import { Pair } from "../lib/farm/types";
+import { HOOK_LINE_CHARS, HOOK_MAX_LINES } from "../lib/farm/wrap";
 
 // ── Дефекты 1/2/4: откат startBatch должен сносить и записи, не только файлы ──
 describe("startBatch: откат сорванной пачки убирает записи задач и пачки, а не только файлы", () => {
@@ -122,7 +123,7 @@ describe("validateBatch: номер блока в сообщении об оши
     ] as unknown as Pair[];
 
     expect(validateBatch({ pairs, files })).toEqual([
-      "блок 3: хук не влезает в 4 строки по 26 знаков",
+      `блок 3: хук не влезает в ${HOOK_MAX_LINES} строки по ${HOOK_LINE_CHARS} знаков`,
     ]);
   });
 
@@ -133,7 +134,7 @@ describe("validateBatch: номер блока в сообщении об оши
     ];
 
     expect(validateBatch({ pairs, files })).toEqual([
-      "блок 2: хук не влезает в 4 строки по 26 знаков",
+      `блок 2: хук не влезает в ${HOOK_MAX_LINES} строки по ${HOOK_LINE_CHARS} знаков`,
     ]);
   });
 });

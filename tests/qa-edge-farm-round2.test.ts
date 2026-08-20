@@ -15,6 +15,7 @@ import { runRenderTick } from "../lib/farm/tick";
 import { ffmpegArgs } from "../lib/farm/render";
 import { startBatch, validateBatch } from "../lib/farm/start";
 import { Item, Batch } from "../lib/farm/types";
+import { HOOK_LINE_CHARS, HOOK_MAX_LINES } from "../lib/farm/wrap";
 
 const base: Item = {
   itemId: "i1",
@@ -243,7 +244,7 @@ describe("K. «блок N» в ошибке хука указывает не н�
     ];
     // Именно так их складывает страница пачки: [...parseErrors, ...validateBatch].
     const shown = [...errors, ...validateBatch({ pairs, files })];
-    expect(shown[1]).toBe("блок 2: хук не влезает в 4 строки по 26 знаков");
+    expect(shown[1]).toBe(`блок 2: хук не влезает в ${HOOK_MAX_LINES} строки по ${HOOK_LINE_CHARS} знаков`);
     // Хук блока 2 при этом безупречен — сообщение показывает на чужой блок.
     expect(pairs[1].hook).toBe("Assalamualaikumwarahmatullahi");
     // После починки: нумерация в validateBatch сквозная по исходным блокам.

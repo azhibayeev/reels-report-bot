@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HOOK_LINE_CHARS, wrapHook } from "../lib/farm/wrap";
+import { HOOK_LINE_CHARS, HOOK_MAX_LINES, wrapHook } from "../lib/farm/wrap";
 
 describe("wrapHook", () => {
   it("режет по словам, не превышая лимит строки", () => {
@@ -8,7 +8,7 @@ describe("wrapHook", () => {
     for (const line of lines!) expect(line.length).toBeLessThanOrEqual(HOOK_LINE_CHARS);
   });
 
-  it("не влезающий в 4 строки хук отвергается", () => {
+  it(`не влезающий в ${HOOK_MAX_LINES} строк хук отвергается`, () => {
     expect(
       wrapHook(
         "satu dua tiga empat lima enam tujuh delapan sembilan sepuluh sebelas duabelas tigabelas empatbelas limabelas"
@@ -25,16 +25,18 @@ describe("wrapHook", () => {
     expect(wrapHook("  Kamu   sibuk?\n Justru itu  ")).toEqual(["Kamu sibuk? Justru itu"]);
   });
 
-  it("ровно 26 знаков — одна строка", () => {
-    const hook = "Jangan tunggu keajaiban ya";
-    expect(hook.length).toBe(26);
-    expect(wrapHook(hook)).toEqual(["Jangan tunggu keajaiban ya"]);
+  it("ровно по лимиту — одна строка", () => {
+    // Фикстура строится от константы: лимит меняется вместе с полями кадра, и
+    // зашитое число превратило бы правку геометрии в загадочно красный тест.
+    const hook = "Jangan tunggu keajaiban ya".slice(0, HOOK_LINE_CHARS).trim();
+    expect(hook.length).toBeLessThanOrEqual(HOOK_LINE_CHARS);
+    expect(wrapHook(hook)).toEqual([hook]);
   });
 
-  it("27 знаков — переносится на две строки", () => {
-    const hook = "Jangan tunggu keajaiban ini";
-    expect(hook.length).toBe(27);
-    expect(wrapHook(hook)).toEqual(["Jangan tunggu keajaiban", "ini"]);
+  it("на знак длиннее лимита — переносится на две строки", () => {
+    const lines = wrapHook("Jangan tunggu keajaiban ini kawan")!;
+    expect(lines.length).toBeGreaterThan(1);
+    for (const line of lines) expect(line.length).toBeLessThanOrEqual(HOOK_LINE_CHARS);
   });
 
   it("лимиты строки и числа строк настраиваются", () => {

@@ -1,5 +1,5 @@
 import { createCanvas, GlobalFonts, type SKRSContext2D } from "@napi-rs/canvas";
-import { HOOK_MAX_LINES, HOOK_SIZES } from "./wrap";
+import { FRAME_HEIGHT, FRAME_WIDTH, HOOK_MAX_LINES, HOOK_SIZES, USABLE_WIDTH } from "./wrap";
 import { DEFAULT_POSITION, HookPosition, isHookPosition } from "./types";
 
 /**
@@ -12,15 +12,14 @@ import { DEFAULT_POSITION, HookPosition, isHookPosition } from "./types";
  * «столько-то знаков на кегль».
  */
 
-export const CANVAS_WIDTH = 1080;
-export const CANVAS_HEIGHT = 1920;
-// Поля по краям: текст вплотную к границе кадра читается плохо и обрезается
-// на превью в ленте.
-const SIDE_MARGIN = 54;
 const LINE_SPACING = 10;
 const STROKE_RATIO = 0.11;
 
-const POSITION_Y: Record<HookPosition, number> = { top: 0.18, center: 0.42, bottom: 0.62 };
+// Доля высоты кадра, на которой стоит СЕРЕДИНА блока хука, а не его верхняя
+// кромка. Разница видна на пачке: у одного хука две строки, у соседнего пять, и
+// при якоре по верху первый висит под самым краем, а второй сползает на лицо.
+// С якорем по центру «верх» читается одинаково при любом числе строк.
+const POSITION_Y: Record<HookPosition, number> = { top: 0.21, center: 0.5, bottom: 0.7 };
 
 let fontFamily: string | null = null;
 
@@ -75,9 +74,9 @@ export function drawHookPng(
   position: HookPosition = DEFAULT_POSITION
 ): DrawnHook | null {
   const family = ensureFont(fontPath);
-  const canvas = createCanvas(CANVAS_WIDTH, CANVAS_HEIGHT);
+  const canvas = createCanvas(FRAME_WIDTH, FRAME_HEIGHT);
   const ctx = canvas.getContext("2d");
-  const maxWidth = CANVAS_WIDTH - SIDE_MARGIN * 2;
+  const maxWidth = USABLE_WIDTH;
 
   let chosen: { lines: string[]; fontSize: number } | null = null;
   for (const fontSize of HOOK_SIZES) {
@@ -108,12 +107,16 @@ export function drawHookPng(
   const step = chosen.fontSize + LINE_SPACING;
   // Неизвестная позиция дала бы NaN и пустой кадр без единой ошибки — падать
   // молча тут нельзя, откатываемся к дефолту.
-  const top = CANVAS_HEIGHT * POSITION_Y[isHookPosition(position) ? position : DEFAULT_POSITION];
+  const middle = FRAME_HEIGHT * POSITION_Y[isHookPosition(position) ? position : DEFAULT_POSITION];
+  // Последней строке межстрочный интервал не нужен — иначе блок «тяжелее» снизу
+  // и центр уезжает вверх на половину интервала.
+  const blockHeight = chosen.lines.length * step - LINE_SPACING;
+  const top = middle - blockHeight / 2;
   chosen.lines.forEach((line, i) => {
     const y = top + i * step;
-    ctx.strokeText(line, CANVAS_WIDTH / 2, y);
+    ctx.strokeText(line, FRAME_WIDTH / 2, y);
     ctx.shadowColor = "transparent"; // тень нужна один раз, под контуром
-    ctx.fillText(line, CANVAS_WIDTH / 2, y);
+    ctx.fillText(line, FRAME_WIDTH / 2, y);
     ctx.shadowColor = "rgba(0, 0, 0, 0.5)";
   });
 

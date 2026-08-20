@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { startBatch, validateBatch } from "../lib/farm/start";
 import { Item } from "../lib/farm/types";
+import { HOOK_LINE_CHARS, HOOK_MAX_LINES } from "../lib/farm/wrap";
 
 const files = [
   { url: "https://blob.public.blob.vercel-storage.com/farm/sources/1.mp4", bytes: 10 },
@@ -21,7 +22,7 @@ describe("validateBatch", () => {
   it("не переносимый хук — ошибка с номером", () => {
     const bad = [{ hook: "Assalamualaikumwarahmatullahi", caption: "Описание" }, pairs[1]];
     expect(validateBatch({ pairs: bad, files })).toEqual([
-      "блок 1: хук не влезает в 4 строки по 26 знаков",
+      `блок 1: хук не влезает в ${HOOK_MAX_LINES} строки по ${HOOK_LINE_CHARS} знаков`,
     ]);
   });
 
