@@ -52,7 +52,7 @@ import { handleCallback, handleEditReply, ApproveDeps } from "../lib/farm/approv
 import { createTrialContainer, fetchPermalink, publishContainer, waitForContainer } from "../lib/farm/instagram";
 import { parseBlocks } from "../lib/farm/parse";
 import { PostTickDeps, postOne, runPostTick } from "../lib/farm/post";
-import { queueRendered } from "../lib/farm/queue";
+import { forgetHandedOutSlots, queueRendered } from "../lib/farm/queue";
 import { nextFreeSlot, DEFAULT_SLOTS } from "../lib/farm/slots";
 import { startBatch } from "../lib/farm/start";
 import { deleteBlobQuiet, listItems, loadItem, saveBatch, saveItem } from "../lib/farm/store";
@@ -241,6 +241,9 @@ async function newBatch(text: string, files: { url: string; bytes: number }[]): 
 }
 
 const TEXT_TWO = "Хук один\nОписание первого\n---\nХук два\nОписание второго";
+
+// Память о выданных слотах живёт на весь процесс — между тестами её чистим.
+beforeEach(forgetHandedOutSlots);
 
 describe("сквозной путь: загрузка → рендер → апрув → заливка → уборка", () => {
   it("доходит до posted, чистит исходник и готовый ролик", async () => {

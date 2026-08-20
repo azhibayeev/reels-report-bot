@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { queueRendered, SlotDeps, takenSlots } from "../lib/farm/queue";
+import { beforeEach } from "vitest";
+import { forgetHandedOutSlots, queueRendered, SlotDeps, takenSlots } from "../lib/farm/queue";
 import { Item } from "../lib/farm/types";
 
 const base: Item = {
@@ -10,6 +11,9 @@ const base: Item = {
   igMediaId: null, permalink: null, error: null, createdAt: "2026-08-20T00:00:00.000Z",
 };
 const NOW = Date.parse("2026-08-20T12:00:00.000Z");
+
+// Память о выданных слотах живёт на весь процесс — между тестами её чистим.
+beforeEach(forgetHandedOutSlots);
 
 describe("takenSlots", () => {
   it("занятыми считает только очередь, заливку и опубликованные", () => {
@@ -31,7 +35,6 @@ describe("takenSlots", () => {
 
 describe("queueRendered", () => {
   function makeDeps(items: Item[], slots: string[]): { deps: SlotDeps; items: Item[] } {
-    let next = 0;
     const deps: SlotDeps = {
       now: () => NOW,
       listItems: async () => items.map((i) => ({ ...i })),
@@ -40,11 +43,8 @@ describe("queueRendered", () => {
         if (idx === -1) items.push(item);
         else items[idx] = item;
       },
-      // Отдаёт слоты по порядку, пропуская уже занятые — как настоящий nextFreeSlot.
-      nextFreeSlot: vi.fn((taken: string[]) => {
-        while (taken.includes(slots[next])) next += 1;
-        return slots[next++];
-      }),
+      // Как настоящий nextFreeSlot: сканирует сетку с начала, ничего не помня.
+      nextFreeSlot: vi.fn((taken: string[]) => slots.find((s) => !taken.includes(s))!),
     };
     return { deps, items };
   }
@@ -72,6 +72,59 @@ describe("queueRendered", () => {
 
     expect(a).not.toBe(b);
     expect(new Set(items.map((i) => i.scheduledAt)).size).toBe(2);
+  });
+
+  it("список из Blob отстал — слот всё равно не выдаётся дважды", async () => {
+    // Ровно то, что случилось на проде: восемнадцать роликов встали в очередь,
+    // а уникальных слотов оказалось девять. Замок отработал, вызовы шли по
+    // очереди — но Blob отдаёт список не сразу после записи, и каждый следующий
+    // вызов не видел слот предыдущего. Полагаться на перечитывание нельзя:
+    // выданное этим процессом надо помнить самому.
+    const slots = [
+      "2026-08-20T13:00:00.000Z",
+      "2026-08-20T13:45:00.000Z",
+      "2026-08-20T14:30:00.000Z",
+    ];
+    const written: Item[] = [];
+    const deps: SlotDeps = {
+      now: () => NOW,
+      // Застрявший список: сколько бы ни записали, он всегда пуст.
+      listItems: async () => [],
+      saveItem: async (item) => {
+        written.push(item);
+      },
+      // Как настоящий nextFreeSlot: каждый раз сканирует сетку с начала и
+      // отдаёт первое незанятое время. Ничего между вызовами не помнит —
+      // именно поэтому память нужна выдаче слотов, а не сетке.
+      nextFreeSlot: (taken: string[]) => slots.find((s) => !taken.includes(s))!,
+    };
+
+    const given = [
+      await queueRendered({ ...base, itemId: "a" }, deps),
+      await queueRendered({ ...base, itemId: "b" }, deps),
+      await queueRendered({ ...base, itemId: "c" }, deps),
+    ];
+
+    expect(new Set(given).size).toBe(3);
+    expect(new Set(written.map((i) => i.scheduledAt)).size).toBe(3);
+  });
+
+  it("ролик, встающий в очередь заново, освобождает своё прежнее время", async () => {
+    // Так происходит после правки описания. Без этого ролик конкурировал бы сам
+    // с собой: его прежний слот остался бы в памяти как занятый, и в расписании
+    // появилась бы дыра на сорок пять минут.
+    const slots = ["2026-08-20T13:00:00.000Z", "2026-08-20T13:45:00.000Z"];
+    const { deps } = makeDeps([], slots);
+
+    const first = await queueRendered({ ...base, itemId: "a" }, deps);
+    // Нажали «Текст»: ролик уходит в editing, и его слот перестаёт считаться
+    // занятым по списку — но память процесса всё ещё держит это время.
+    const editing = { ...base, itemId: "a", status: "editing" as const, scheduledAt: first };
+    await deps.saveItem(editing);
+
+    const again = await queueRendered(editing, deps);
+
+    expect(again).toBe(first);
   });
 
   it("уже занятые слоты не выдаются повторно", async () => {
