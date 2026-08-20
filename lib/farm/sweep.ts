@@ -1,4 +1,5 @@
 import { batchesToKick } from "./commands";
+import { normalizeSchedule } from "./schedule";
 import { Item } from "./types";
 
 /**
@@ -18,11 +19,15 @@ export interface SweepDeps {
   now: () => number;
   listItems: () => Promise<Item[]>;
   triggerRender: (batchId: string) => Promise<void>;
+  saveItem: (item: Item) => Promise<void>;
+  nextFreeSlot: (taken: string[], nowMs: number) => string;
 }
 
 export interface SweepResult {
   kicked: string[];
   failed: { batchId: string; error: string }[];
+  /** Сколько роликов пришлось расселить из совпавших слотов. */
+  respaced: number;
 }
 
 export async function runSweep(deps: SweepDeps): Promise<SweepResult> {
@@ -30,6 +35,23 @@ export async function runSweep(deps: SweepDeps): Promise<SweepResult> {
   // «работы нет», и будильник рапортовал бы об успехе, ничего не сделав.
   const items = await deps.listItems();
   const batches = batchesToKick(items, deps.now());
+
+  // Расселяем слипшиеся слоты. Замок при выдаче работает внутри процесса, а
+  // ролики рендерятся на разных инстансах одновременно — гонку между ними
+  // закрывает только вот такой регулярный проход (см. lib/farm/schedule.ts).
+  let respaced = 0;
+  for (const change of normalizeSchedule(items, deps.now(), deps.nextFreeSlot)) {
+    const item = items.find((i) => i.itemId === change.itemId);
+    if (!item) continue;
+    try {
+      await deps.saveItem({ ...item, scheduledAt: change.scheduledAt });
+      respaced += 1;
+    } catch (error) {
+      // Неудачная правка не должна отменять пинок сборки: расселение — вторая
+      // задача этого прохода, и следующий проход попробует снова.
+      console.error("farm sweep: не удалось передвинуть ролик", change.itemId, error);
+    }
+  }
 
   const kicked: string[] = [];
   const failed: { batchId: string; error: string }[] = [];
@@ -44,5 +66,5 @@ export async function runSweep(deps: SweepDeps): Promise<SweepResult> {
       failed.push({ batchId, error: (error as Error).message });
     }
   }
-  return { kicked, failed };
+  return { kicked, failed, respaced };
 }
