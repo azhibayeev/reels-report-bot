@@ -149,6 +149,29 @@ describe("formatSlot", () => {
 });
 
 describe("formatQueue", () => {
+  it("ждущий сборки и собираемый прямо сейчас — разные строки", () => {
+    // Раньше обе стадии складывались в одну строку «ещё рендерится». Из-за
+    // этого вставшая цепочка выглядела как идущая работа: тринадцать задач
+    // висели в pending, а сводка бодро сообщала, что они рендерятся.
+    const text = formatQueue(
+      [
+        { ...base, itemId: "a", status: "rendering", renderingAt: "2026-08-19T00:59:00.000Z" },
+        { ...base, itemId: "b", status: "pending" },
+        { ...base, itemId: "c", status: "pending" },
+      ],
+      NOW
+    );
+    expect(text).toContain("собирается сейчас: 1");
+    expect(text).toContain("ждут сборки: 2");
+    expect(text).not.toContain("ещё рендерится");
+  });
+
+  it("нечего собирать — обе строки молчат", () => {
+    const text = formatQueue([{ ...base, status: "review" }], NOW);
+    expect(text).not.toContain("собирается сейчас");
+    expect(text).not.toContain("ждут сборки");
+  });
+
   it("пустая ферма — внятный непустой текст", () => {
     const text = formatQueue([], NOW);
     expect(text.length).toBeGreaterThan(0);
@@ -199,15 +222,16 @@ describe("formatQueue", () => {
     expect(text).not.toContain("<html>");
   });
 
-  it("считает незавершённый рендер (pending + rendering)", () => {
+  it("доделанные ролики в незавершённых не числятся", () => {
     const items = [
       { ...base, itemId: "i1", status: "pending" as const },
       { ...base, itemId: "i2", status: "rendering" as const },
       { ...base, itemId: "i3", status: "posted" as const },
+      { ...base, itemId: "i4", status: "failed" as const },
     ];
     const text = formatQueue(items, NOW);
-    // Число где-то в тексте должно отражать два незавершённых.
-    expect(text).toMatch(/2/);
+    expect(text).toContain("собирается сейчас: 1");
+    expect(text).toContain("ждут сборки: 1");
   });
 
   it("ролик, упавший на заливке в IG (videoUrl уже есть), идёт в «Не залились», а не в «Не собрались»", () => {

@@ -147,7 +147,12 @@ export function formatQueue(items: Item[], nowMs: number): string {
 
   const review = items.filter((i) => i.status === "review");
   const queued = items.filter((i) => i.status === "queued");
-  const rendering = items.filter((i) => i.status === "pending" || i.status === "rendering");
+  // Две стадии, а не одна. Складывать их в строку «ещё рендерится» — значит
+  // выдавать вставшую цепочку за идущую работу: пинок сборки может не дойти
+  // (см. triggerRender в lib/farm/tick.ts), и тогда задачи молча висят в
+  // pending, а сводка бодро сообщает, что они рендерятся. Именно так и вышло.
+  const rendering = items.filter((i) => i.status === "rendering");
+  const waiting = items.filter((i) => i.status === "pending");
   // Рендер и заливка в IG — разные стадии с разными виновниками: ffmpeg vs Graph API.
   // videoUrl появляется только после успешной сборки (см. lib/farm/render.ts), поэтому
   // по нему и различаем — упал ли ролик, ещё не собравшись, или уже собранный на публикации.
@@ -157,7 +162,8 @@ export function formatQueue(items: Item[], nowMs: number): string {
   const lines: string[] = ["🎬 <b>Ферма</b>"];
   lines.push(`ждут апрува: ${review.length}`);
   lines.push(`в очереди: ${queued.length}`);
-  if (rendering.length > 0) lines.push(`ещё рендерится: ${rendering.length}`);
+  if (rendering.length > 0) lines.push(`собирается сейчас: ${rendering.length}`);
+  if (waiting.length > 0) lines.push(`ждут сборки: ${waiting.length}`);
 
   const nextQueued = queued
     .filter((i) => i.scheduledAt && Date.parse(i.scheduledAt) > nowMs)
