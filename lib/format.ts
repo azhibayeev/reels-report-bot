@@ -163,9 +163,11 @@ export function formatClicksMessage(s: ClicksStats, title: string): string {
 
 // Сводка по таргету: рекламные метрики + разбивка лидов по уровню инвестора.
 // periodLabel задаёт вызывающий (напр. «за вчерашние сутки» / «за всё время»).
+// levels = null — база лидов квиза не подключена. Рекламную часть это не отменяет:
+// цифры Meta приходят своим путём, и терять их из-за отсутствующей разбивки нельзя.
 export function formatTargetMessage(
   ads: AdInsights,
-  levels: LeadLevels,
+  levels: LeadLevels | null,
   title: string,
   periodLabel: string
 ): string {
@@ -182,6 +184,10 @@ export function formatTargetMessage(
   if (!ads.hasData) lines.push("<i>За период не было открутки — цифры нулевые.</i>");
 
   lines.push("");
+  if (!levels) {
+    lines.push("<i>Разбивка по лидам не настроена: квиз пишет заявки мимо базы, читать нечего.</i>");
+    return lines.join("\n");
+  }
   lines.push("<b>Потенциал инвестора</b> (дошли до конца квиза):");
   lines.push(`🔥 Высокий: <b>${nf.format(levels.high)}</b>`);
   lines.push(`🟡 Средний: <b>${nf.format(levels.medium)}</b>`);

@@ -39,6 +39,14 @@ interface LeadRow {
 
 const PAGE = 1000;
 
+/**
+ * База лидов подключена? Квиз умеет писать их и мимо Supabase (LEAD_STORE=console),
+ * и тогда разбивки по уровню инвестора просто нет — это не поломка.
+ */
+export function leadsConfigured(): boolean {
+  return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+}
+
 async function sbFetchLeads(sinceIso: string | null): Promise<LeadRow[]> {
   const base = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -68,7 +76,9 @@ async function sbFetchLeads(sinceIso: string | null): Promise<LeadRow[]> {
 }
 
 // Счётчики по уровню инвестора за окно [sinceIso, now). sinceIso=null → за всё время.
-export async function getLeadLevels(sinceIso: string | null): Promise<LeadLevels> {
+// null — источник лидов не подключён; рекламная часть отчёта от этого не страдает.
+export async function getLeadLevels(sinceIso: string | null): Promise<LeadLevels | null> {
+  if (!leadsConfigured()) return null;
   const rows = await sbFetchLeads(sinceIso);
   const out: LeadLevels = { high: 0, medium: 0, low: 0, total: 0, sinceIso };
   for (const r of rows) {
