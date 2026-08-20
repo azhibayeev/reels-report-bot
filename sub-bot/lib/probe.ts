@@ -1,10 +1,10 @@
-import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync, mkdtempSync, rmSync, statfsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { ffmpegPath, ffprobePath, fontPath, ffmpegHash, FFMPEG_SHA256 } from "./binaries";
 import { assEscape } from "./escape";
 import { SUBTITLE_FONTSIZE } from "./cues";
+import { spawnRunner } from "./proc";
 
 export interface ProbeReport {
   ffmpeg: string;
@@ -51,26 +51,14 @@ export function fontFamily(ttfPath: string): string {
   throw new Error("не удалось прочитать name-таблицу: нет записи nameID=1");
 }
 
-function run(bin: string, args: string[]): Promise<{ code: number | null; stderr: string; stdout: Buffer }> {
-  return new Promise((resolve) => {
-    const p = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stderr = "";
-    const out: Buffer[] = [];
-    p.stdout.on("data", (d) => out.push(d as Buffer));
-    p.stderr.on("data", (d) => {
-      stderr = (stderr + String(d)).slice(-8000);
-    });
-    p.on("close", (code) => resolve({ code, stderr, stdout: Buffer.concat(out) }));
-    p.on("error", (e) => resolve({ code: null, stderr: String(e), stdout: Buffer.alloc(0) }));
-  });
-}
-
 export async function runProbe(): Promise<ProbeReport> {
   const ffmpeg = ffmpegPath();
   const ffprobe = ffprobePath();
   const font = fontPath();
   const sha = await ffmpegHash(ffmpeg);
-  const filters = await run(ffmpeg, ["-hide_banner", "-filters"]);
+  // Раннер общий с lib/render.ts / lib/media.ts (см. lib/proc.ts) — здесь и
+  // там он спавнил ffmpeg дословно одинаково, две копии смысла не имели.
+  const filters = await spawnRunner(ffmpeg, ["-hide_banner", "-filters"]);
   const family = fontFamily(font);
 
   let tmpFreeMb = -1;
@@ -123,7 +111,7 @@ export async function runProbe(): Promise<ProbeReport> {
       "utf8"
     );
     const out = join(dir, "frame.png");
-    const r = await run(ffmpeg, [
+    const r = await spawnRunner(ffmpeg, [
       "-y",
       "-f", "lavfi",
       "-i", "color=c=0x1b5e20:s=1080x1920:d=2",
@@ -144,8 +132,8 @@ export async function runProbe(): Promise<ProbeReport> {
     font,
     ffmpegSha256: sha,
     hashMatches: sha === FFMPEG_SHA256,
-    hasSubtitlesFilter: /(^|\s)subtitles(\s|$)/m.test(filters.stdout.toString() + filters.stderr),
-    hasDrawtextFilter: /(^|\s)drawtext(\s|$)/m.test(filters.stdout.toString() + filters.stderr),
+    hasSubtitlesFilter: /(^|\s)subtitles(\s|$)/m.test(filters.stdout + filters.stderr),
+    hasDrawtextFilter: /(^|\s)drawtext(\s|$)/m.test(filters.stdout + filters.stderr),
     fontFamilyFromFile: family,
     tmpFreeMb,
     renderOk,
