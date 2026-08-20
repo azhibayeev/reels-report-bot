@@ -49,6 +49,67 @@ function makeDeps(overrides: Partial<PostDeps> = {}): PostDeps {
   };
 }
 
+describe("postOne: сломанный токен аккаунта", () => {
+  // Это беда аккаунта, а не ролика, и сжигать за неё очередь нельзя. На проде
+  // токен оказался нечитаемым, первый же ролик ушёл в failed — а за ним стояли
+  // двадцать восемь, по одному каждые сорок пять минут. Вернуть их потом нечем:
+  // /retry сознательно не трогает упавших на публикации, чтобы не задвоить пост.
+  const AUTH = "IG контейнер не создан (HTTP 400): Invalid OAuth access token - Cannot parse access token";
+
+  it("ролик остаётся в очереди, а не уходит в failed", async () => {
+    const saveItem = vi.fn(async (_item: Item) => {});
+    const deps = makeDeps({
+      saveItem,
+      createTrialContainer: vi.fn(async () => {
+        throw new Error(AUTH);
+      }),
+    });
+
+    await postOne(base, deps);
+
+    const saved = saveItem.mock.calls.map((c) => c[0] as Item);
+    const last = saved[saved.length - 1];
+    expect(last.status).toBe("queued");
+    expect(last.postingAt).toBeNull();
+    // Слот не сдвигаем: когда токен починят, ролик выйдет первым же тиком.
+    expect(last.scheduledAt).toBe(base.scheduledAt);
+  });
+
+  it("и не тратит попытки: чинится не повтором, а заменой токена", async () => {
+    const saveItem = vi.fn(async (_item: Item) => {});
+    const deps = makeDeps({
+      saveItem,
+      loadItem: vi.fn(async () => ({ ...base, postAttempts: 4 })),
+      createTrialContainer: vi.fn(async () => {
+        throw new Error(AUTH);
+      }),
+    });
+
+    await postOne(base, deps);
+
+    const saved = saveItem.mock.calls.map((c) => c[0] as Item);
+    const last = saved[saved.length - 1];
+    expect(last.status).toBe("queued");
+    expect(last.postAttempts).toBe(4);
+  });
+
+  it("сообщает в чат, что стоит вся очередь, а не один ролик", async () => {
+    const notify = vi.fn(async (_text: string) => {});
+    const deps = makeDeps({
+      notify,
+      createTrialContainer: vi.fn(async () => {
+        throw new Error(AUTH);
+      }),
+    });
+
+    await postOne(base, deps);
+
+    const text = notify.mock.calls.map((c) => String(c[0])).join(" ");
+    expect(text).toContain("токен");
+    expect(text).not.toContain("не залился");
+  });
+});
+
 describe("postOne", () => {
   it("проходит контейнер → ожидание → публикацию, шлёт permalink в чат и удаляет videoUrl", async () => {
     const deps = makeDeps();

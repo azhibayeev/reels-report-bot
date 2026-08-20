@@ -58,6 +58,29 @@ const TRANSIENT_PUBLISH_ERROR_PATTERNS: RegExp[] = [
 // вердикт про сам ролик (битый файл, протухший upload-сессия), а не про
 // нагрузку на API: повтор с фиксом C иначе стоил бы до пяти бесполезных
 // попыток и лишний час занятого слота.
+/**
+ * Отказ по токену: Graph не принял ключ доступа. Это не про конкретный ролик, а
+ * про аккаунт целиком — значит и обходиться с ним надо иначе, чем с временным
+ * сбоем или с браком ролика.
+ *
+ * На проде цена ошибки была наглядной: токен оказался нечитаемым, первый же
+ * ролик ушёл в failed, а за ним стояли двадцать восемь — по одному каждые сорок
+ * пять минут. Вернуть их потом нечем: /retry сознательно не трогает упавших на
+ * публикации, чтобы не задвоить пост в ленте.
+ */
+const AUTH_ERROR_PATTERNS: RegExp[] = [
+  /invalid oauth access token/i,
+  /cannot parse access token/i,
+  /session has been invalidated/i,
+  /access token.*(expired|revoked)/i,
+  /\(#190\)/,
+  /\bcode.?190\b/i,
+];
+
+export function isAuthFailure(message: string): boolean {
+  return AUTH_ERROR_PATTERNS.some((re) => re.test(message));
+}
+
 function isTransientPublishError(message: string): boolean {
   if (/IG отбраковал ролик \((ERROR|EXPIRED)\)/.test(message)) return false;
   return TRANSIENT_PUBLISH_ERROR_PATTERNS.some((re) => re.test(message));
@@ -205,6 +228,20 @@ async function postOneLocked(item: Item, deps: PostDeps): Promise<void> {
         console.error("farm post: сбой после сохранения permalink", fresh.itemId, message);
       }
       await deleteVideoQuiet();
+      return;
+    }
+    if (isAuthFailure(message)) {
+      // Отказ по токену — беда аккаунта, а не ролика. Ролик остаётся в очереди
+      // со своим временем и попытки не тратит: чинится это заменой токена, а не
+      // повтором. Слот уже прошёл, поэтому первым же тиком после починки ролик
+      // уйдёт в публикацию, а за ним и остальные — по порядку.
+      console.error("farm postOne: отказ по токену, очередь остановлена", fresh.itemId, message);
+      await deps.saveItem({ ...fresh, status: "queued", postingAt: null, error: message });
+      await notifyQuiet(
+        `Заливка стоит: Instagram не принимает токен — ${message}\n\n` +
+          `Ролики не потеряны, они ждут в очереди и уйдут сами, как только токен заменят. ` +
+          `Проверить очередь: /reels`
+      );
       return;
     }
     if (isTransientPublishError(message)) {
