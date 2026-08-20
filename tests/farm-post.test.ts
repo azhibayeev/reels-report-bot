@@ -45,6 +45,7 @@ function makeDeps(overrides: Partial<PostDeps> = {}): PostDeps {
     fetchPermalink: vi.fn(async () => "https://instagram.com/reel/M1"),
     deleteBlobQuiet: vi.fn(async () => {}),
     notify: vi.fn(async () => {}),
+    recordPublication: vi.fn(async () => {}),
     ...overrides,
   };
 }
@@ -136,6 +137,51 @@ describe("postOne: куда уходят сообщения", () => {
     );
 
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("не залился"), null, 738812437);
+  });
+});
+
+describe("postOne: журнал публикаций", () => {
+  // Без этой врезки журнал остаётся мёртвым кодом: связь «хук → рилс» живёт
+  // только в farm/items/, а уборка её стирает через трое суток. После этого
+  // ответить, какой хук стоял в ролике, собравшем 300 тысяч, нечем.
+  it("публикация попадает в журнал вместе с хуком и id рилса", async () => {
+    const recorded: { hook: string; igMediaId: string; permalink: string | null }[] = [];
+    const deps = makeDeps({
+      recordPublication: async (rec) => {
+        recorded.push({ hook: rec.hook, igMediaId: rec.igMediaId, permalink: rec.permalink });
+      },
+    });
+
+    await postOne(base, deps);
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0].hook).toBe(base.hook);
+    expect(recorded[0].igMediaId).toBe("M1");
+    // Пишем ПОСЛЕ получения ссылки: иначе в журнале навсегда останется null,
+    // а ссылка — это то, чем человек проверяет ролик глазами.
+    expect(recorded[0].permalink).toBe("https://instagram.com/reel/M1");
+  });
+
+  it("отметка о времени публикации проставляется: по ней уборка считает срок", async () => {
+    const saved: Item[] = [];
+    const deps = makeDeps({ saveItem: async (i: Item) => { saved.push(i); } });
+
+    await postOne(base, deps);
+
+    const posted = saved.filter((i) => i.status === "posted");
+    expect(posted.length).toBeGreaterThan(0);
+    for (const i of posted) expect(i.postedAt).toBeTruthy();
+  });
+
+  it("сбой записи в журнал не отменяет публикацию: рилс уже на аккаунте", async () => {
+    const deps = makeDeps({
+      recordPublication: async () => {
+        throw new Error("blob down");
+      },
+    });
+
+    await expect(postOne(base, deps)).resolves.toBeUndefined();
+    expect(deps.notify).toHaveBeenCalledWith(expect.stringContaining("Залил"), null, base.chatId);
   });
 });
 

@@ -16,7 +16,7 @@ export function batchesToKick(items: Item[], nowMs: number): string[] {
 
 export function parseFarmCommand(
   text: string
-): "batch" | "reels" | "style" | "rhythm" | "retry" | "token" | null {
+): "batch" | "reels" | "style" | "rhythm" | "retry" | "token" | "hooks" | null {
   // "/batch@MyReelsBot arg" -> "batch"; Telegram дописывает имя бота в группах.
   const cmd = text.trim().split(/\s+/)[0]?.split("@")[0].toLowerCase();
   if (cmd === "/batch") return "batch";
@@ -25,6 +25,7 @@ export function parseFarmCommand(
   if (cmd === "/rhythm") return "rhythm";
   if (cmd === "/retry") return "retry";
   if (cmd === "/token") return "token";
+  if (cmd === "/hooks") return "hooks";
   return null;
 }
 

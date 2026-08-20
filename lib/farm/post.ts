@@ -4,6 +4,7 @@ import { escapeHtml } from "../format";
 import { sendMessage } from "../telegram";
 import { requireEnv } from "./tick";
 import { resolveFarmToken } from "./token-store";
+import { PublicationRecord, recordPublication, toRecord } from "./journal";
 import { Item } from "./types";
 
 export interface PostDeps {
@@ -21,6 +22,11 @@ export interface PostDeps {
    * того, кто её загрузил.
    */
   notify: (text: string, threadId: number | null, chatId?: number) => Promise<void>;
+  /**
+   * Запись в вечный журнал. Отдельной зависимостью, а не прямым вызовом:
+   * postOne обязан оставаться тестируемым без сети, а журнал ходит в Blob.
+   */
+  recordPublication: (rec: PublicationRecord) => Promise<void>;
 }
 
 export interface PostTickDeps extends PostDeps {
@@ -207,17 +213,36 @@ async function postOneLocked(item: Item, deps: PostDeps): Promise<void> {
     // Пишем igMediaId сразу, ДО запроса ссылки: рилс уже опубликован на аккаунте,
     // а fetchPermalink — это лишний round-trip к Graph API без таймаута. Если вызов
     // убьют во время этого запроса, id опубликованного медиа не должен потеряться.
-    await deps.saveItem({ ...fresh, status: "posted", postingAt: null, igMediaId: mediaId, permalink: null });
+    // postedAt нужен уборке: она считает срок хранения записи от публикации, а
+    // не от создания — пачка создаётся вся разом, а выходит растянуто на дни.
+    const postedAt = new Date(deps.now()).toISOString();
+    await deps.saveItem({ ...fresh, status: "posted", postingAt: null, postedAt, igMediaId: mediaId, permalink: null });
     const permalink = await deps.fetchPermalink(mediaId).catch((permalinkError) => {
       console.error("farm fetchPermalink failed", fresh.itemId, mediaId, permalinkError);
       return "";
     });
     if (permalink) {
-      await deps.saveItem({ ...fresh, status: "posted", postingAt: null, igMediaId: mediaId, permalink });
+      await deps.saveItem({ ...fresh, status: "posted", postingAt: null, postedAt, igMediaId: mediaId, permalink });
       savedPermalink = permalink;
       await notifyQuiet(`Залил ${fresh.index}/${fresh.total}: ${permalink}`);
     } else {
       await notifyQuiet(`Залил ${fresh.index}/${fresh.total}, ролик опубликован, но ссылку получить не удалось`);
+    }
+    // Журнал пишем ПОСЛЕ запроса ссылки: иначе в нём навсегда останется null
+    // там, где человек глазами проверяет ролик. Путь записи детерминированный и
+    // перезаписываемый, так что повтор безопасен.
+    const record = toRecord(
+      { ...fresh, status: "posted", postedAt, igMediaId: mediaId, permalink: savedPermalink },
+      postedAt
+    );
+    if (record) {
+      try {
+        await deps.recordPublication(record);
+      } catch (journalError) {
+        // Ролик уже на аккаунте — падать нельзя. Но и молчать нельзя: без записи
+        // связь «хук → рилс» потеряется, когда уборка снесёт farm/items/.
+        console.error("farm postOne: публикация не записана в журнал", fresh.itemId, mediaId, journalError);
+      }
     }
     await deleteVideoQuiet();
   } catch (error) {
@@ -225,7 +250,14 @@ async function postOneLocked(item: Item, deps: PostDeps): Promise<void> {
     if (mediaId !== null) {
       // publishContainer уже успел — ролик реально на аккаунте, пометить failed
       // и освободить слот было бы враньём и дублем при повторной публикации.
-      await deps.saveItem({ ...fresh, status: "posted", postingAt: null, igMediaId: mediaId, permalink: savedPermalink });
+      await deps.saveItem({
+        ...fresh,
+        status: "posted",
+        postingAt: null,
+        postedAt: fresh.postedAt ?? new Date(deps.now()).toISOString(),
+        igMediaId: mediaId,
+        permalink: savedPermalink,
+      });
       if (savedPermalink === null) {
         await notifyQuiet(`Залил ${fresh.index}/${fresh.total}, но ссылку не получил: ${message}`);
       } else {
@@ -311,5 +343,6 @@ export async function livePostTickDeps(): Promise<PostTickDeps> {
     listItems,
     notify: (text, threadId, chatId) =>
       sendMessage(escapeHtml(text), { thread: threadId, ...(chatId ? { chat: chatId } : {}) }),
+    recordPublication,
   };
 }

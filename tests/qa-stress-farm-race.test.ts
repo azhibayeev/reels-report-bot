@@ -70,6 +70,7 @@ describe("A. два тика заливки на один ролик", () => {
       fetchPermalink: async () => "https://instagram.com/reel/M1",
       deleteBlobQuiet: async () => {},
       notify: async () => {},
+      recordPublication: async () => {},
     });
 
     // Внешний таймер /api/farm/post и добор из суточного крона стартуют независимо:
@@ -220,6 +221,7 @@ describe("F. Graph API отвечает 429 при создании контей
       fetchPermalink: async () => "",
       deleteBlobQuiet: async () => {},
       notify: async () => {},
+      recordPublication: async () => {},
     };
 
     await postOne({ ...baseItem }, deps);

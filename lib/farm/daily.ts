@@ -30,7 +30,18 @@ export function classifyForCleanup(
   items: Item[],
   nowMs: number
 ): { purge: Item[]; expire: Item[]; unstick: Item[] } {
-  const purge = items.filter((i) => !isActive(i) && ageMs(i.createdAt, nowMs) > PURGE_AFTER_MS);
+  // Возраст завершённой задачи считаем от выхода ролика, а не от createdAt.
+  // createdAt здесь врёт: пачка из 60 штук создаётся вся разом в одну секунду,
+  // а публикуется растянуто на дни по расписанию слотов. По createdAt порог
+  // наступает для всех 60 одновременно — и уборка сносила запись о ролике,
+  // вышедшем накануне (проверено на проде: пачка от 20.08 11:23Z, последняя
+  // публикация 22.08 16:45Z, снос всех записей 23.08 20:00Z). Журнал жил меньше
+  // суток после выхода, а метрики по igMediaId снимаются трое суток.
+  // Записи без postedAt (сериализованы до появления поля) считаем по-старому:
+  // иначе накопленный мусор завис бы в Blob навсегда.
+  const purge = items.filter(
+    (i) => !isActive(i) && ageMs(i.postedAt ?? i.createdAt, nowMs) > PURGE_AFTER_MS
+  );
   const expire = items.filter(
     (i) => (i.status === "review" || i.status === "editing") && ageMs(i.createdAt, nowMs) > REVIEW_EXPIRY_MS
   );
@@ -229,7 +240,15 @@ export async function runDaily(
 
   try {
     const sources = await deps.listSources();
-    const used = new Set(items.map((i) => i.sourceUrl));
+    // Ссылки считаем по обоим полям: дорожка группы (musicUrl) лежит в том же
+    // SOURCES_PREFIX, что и подложки, и по одному sourceUrl выглядела бы сиротой.
+    // Старше суток — и уборка сносила живую дорожку пачки, после чего рендер
+    // молча собирал ролики без звука вместо честной ошибки.
+    const used = new Set<string>();
+    for (const item of items) {
+      if (item.sourceUrl) used.add(item.sourceUrl);
+      if (item.musicUrl) used.add(item.musicUrl);
+    }
     for (const source of sources) {
       // Отсрочка обязательна: файл, залитый минуту назад, ещё не имеет задачи —
       // /api/farm/start создаёт их после загрузки, и без грейса уборка сожрала бы живую пачку.

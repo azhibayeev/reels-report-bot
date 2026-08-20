@@ -65,6 +65,9 @@ export interface Item {
   permalink: string | null;
   error: string | null;
   createdAt: string;
+  /** Когда ролик реально ушёл в Instagram. Необязательное: старые записи в Blob
+      сериализованы без него. */
+  postedAt?: string | null;
   /** Необязательное по той же причине, что у position: старые записи в Blob сериализованы без него, а обязательное поле сломало бы литералы Item в тестах. Счётчик попыток заливки, переживших временный отказ Graph — после MAX_TRANSIENT_ATTEMPTS ролик уходит в failed, а не ретраится вечно. */
   postAttempts?: number;
 }

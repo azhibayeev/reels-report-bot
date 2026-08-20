@@ -36,6 +36,10 @@ import { checkToken, exchangeForLongLived, fetchPageToken } from "../../../lib/f
 import { installFarmToken } from "../../../lib/farm/token-setup";
 import { loadFarmToken, saveFarmToken } from "../../../lib/farm/token-store";
 import { formatTokenReport } from "../../../lib/farm/token-report";
+import { listJournalBatches, loadJournal } from "../../../lib/farm/journal";
+import { fetchReelMetrics } from "../../../lib/farm/insights";
+import { formatHooksReport, rankHooks } from "../../../lib/farm/hooks-report";
+import { resolveFarmToken } from "../../../lib/farm/token-store";
 import { BATCH_TOKEN_TTL_MS, signBatchToken } from "../../../lib/farm/tokens";
 import { fetchAllReels, fetchFollowersCount, fetchViews } from "../../../lib/instagram";
 import { getLeadLevels } from "../../../lib/leads";
@@ -83,7 +87,8 @@ const HELP =
   "/rhythm плотно|обычно|спокойно — регулярность выпуска (или своими числами: /rhythm 30 20)\n" +
   "/retry [N] — вернуть в сборку сбойные ролики (по умолчанию 3)\n" +
   "/token — проверить ключи доступа Instagram: живы ли и хватает ли прав\n" +
-  "/token set <ключ> — обменять временный ключ из Explorer на бессрочный и сохранить";
+  "/token set <ключ> — обменять временный ключ из Explorer на бессрочный и сохранить\n" +
+  "/hooks — какие хуки сколько собрали: таблица по последней пачке";
 
 // Живой замер: список рилсов + актуальные просмотры. Снапшот НЕ сохраняем,
 // чтобы не сдвигать базу ежедневного отчёта.
@@ -218,6 +223,35 @@ async function handleFarmCommand(cmd: string, text: string, opts: SendOptions, r
         console.error("farm /reels triggerRender failed", batchId, error);
       }
     }
+    return true;
+  }
+  if (cmd === "/hooks") {
+    // По умолчанию — последняя пачка: спрашивают почти всегда про неё, а
+    // сквозной отчёт по всем пачкам смешивал бы разные наборы подложек и
+    // разное время выпуска, то есть сравнивал бы несравнимое.
+    const batches = await listJournalBatches();
+    if (batches.length === 0) {
+      await sendMessage(
+        "Журнал пуст: ни одной публикации в нём ещё нет. Он начинает заполняться с роликов, " +
+          "опубликованных после этого обновления — по прежним связь «хук → рилс» не сохранялась.",
+        opts
+      );
+      return true;
+    }
+    const asked = text.trim().split(/\s+/)[1];
+    const batchId = asked && batches.includes(asked) ? asked : batches[0];
+    const journal = await loadJournal(batchId);
+    const metrics = await fetchReelMetrics(
+      journal.records.map((r) => r.igMediaId),
+      { token: await resolveFarmToken() }
+    );
+    const report = formatHooksReport(rankHooks(journal.records, metrics));
+    // О неполноте журнала молчать нельзя: вывод «этот хук лучший» меняется от
+    // того, читались ли остальные записи.
+    const incomplete =
+      journal.skipped > 0 ? `\n\n⚠️ Не прочитано записей журнала: ${journal.skipped} — выводы неполны.` : "";
+    const others = batches.length > 1 ? `\n\nДругие пачки: ${batches.slice(1, 4).join(", ")}` : "";
+    await sendMessage(report + incomplete + others, opts);
     return true;
   }
   if (cmd === "/token") {
@@ -388,6 +422,7 @@ export async function GET(req: NextRequest) {
         { command: "rhythm", description: "Регулярность выпуска роликов" },
         { command: "retry", description: "Пересобрать сбойные ролики" },
         { command: "token", description: "Проверить ключи доступа Instagram" },
+        { command: "hooks", description: "Какие хуки сколько собрали" },
         { command: "style", description: "Дефолтная позиция хука для будущих пачек" },
       ],
     }),

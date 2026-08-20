@@ -56,6 +56,7 @@ import { forgetHandedOutSlots, queueRendered } from "../lib/farm/queue";
 import { nextFreeSlot, DEFAULT_SLOTS } from "../lib/farm/slots";
 import { startBatch } from "../lib/farm/start";
 import { deleteBlobQuiet, listItems, loadItem, saveBatch, saveItem } from "../lib/farm/store";
+import { loadJournal, recordPublication } from "../lib/farm/journal";
 import { formatSlot } from "../lib/farm/commands";
 import { sendVideoWithButtons, answerCallback, askForReply, dropKeyboard, editCaption } from "../lib/farm/telegram";
 import { runRenderTick, RenderTickDeps } from "../lib/farm/tick";
@@ -210,6 +211,9 @@ function postDeps(over: Partial<PostTickDeps> = {}): PostTickDeps {
     loadItem,
     saveItem,
     listItems,
+    // Настоящая запись в журнал, а не заглушка: сквозной тест обязан ловить
+    // разрыв между публикацией и журналом — ради него журнал и существует.
+    recordPublication,
     createTrialContainer: (videoUrl, caption) => createTrialContainer(videoUrl, caption, IG),
     waitForContainer: (id) => waitForContainer(id, IG),
     publishContainer: (id) => publishContainer(id, IG),

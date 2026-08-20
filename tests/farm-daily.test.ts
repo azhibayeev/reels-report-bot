@@ -58,6 +58,56 @@ describe("classifyForCleanup", () => {
     const { unstick } = classifyForCleanup([stuckByCreated, freshByCreated], NOW);
     expect(unstick.map((i) => i.itemId)).toEqual(["sc"]);
   });
+
+  it("вчерашняя публикация из старой пачки переживает уборку — метрики ещё не сняты", () => {
+    const posted = {
+      ...base,
+      itemId: "yesterday",
+      status: "posted" as const,
+      createdAt: new Date(NOW - 5 * 86_400_000).toISOString(),
+      postedAt: new Date(NOW - 86_400_000).toISOString(),
+    };
+    const { purge } = classifyForCleanup([posted], NOW);
+    expect(purge).toHaveLength(0);
+  });
+
+  it("из одной старой пачки уходит только то, что вышло четыре дня назад, а не вся пачка разом", () => {
+    // Ровно прод-случай: пачка создана одним махом, а выходила растянуто.
+    const createdAt = new Date(NOW - 10 * 86_400_000).toISOString();
+    const longAgo = { ...base, itemId: "long-ago", status: "posted" as const, createdAt, postedAt: new Date(NOW - 4 * 86_400_000).toISOString() };
+    const recent = { ...base, itemId: "recent", status: "posted" as const, createdAt, postedAt: new Date(NOW - 2 * 86_400_000).toISOString() };
+    const { purge } = classifyForCleanup([longAgo, recent], NOW);
+    expect(purge.map((i) => i.itemId)).toEqual(["long-ago"]);
+  });
+
+  it("запись без отметки публикации живёт по-старому — переход не подвесил накопленный мусор навечно", () => {
+    const legacy = {
+      ...base,
+      itemId: "legacy",
+      status: "posted" as const,
+      createdAt: new Date(NOW - PURGE_AFTER_MS - 1).toISOString(),
+    };
+    const legacyFresh = {
+      ...base,
+      itemId: "legacy-fresh",
+      status: "posted" as const,
+      createdAt: new Date(NOW - 1000).toISOString(),
+    };
+    const { purge } = classifyForCleanup([legacy, legacyFresh], NOW);
+    expect(purge.map((i) => i.itemId)).toEqual(["legacy"]);
+  });
+
+  it("неудачная задача без публикации считается по созданию, а не висит вечно", () => {
+    const failed = {
+      ...base,
+      itemId: "f",
+      status: "failed" as const,
+      postedAt: null,
+      createdAt: new Date(NOW - PURGE_AFTER_MS - 1).toISOString(),
+    };
+    const { purge } = classifyForCleanup([failed], NOW);
+    expect(purge.map((i) => i.itemId)).toEqual(["f"]);
+  });
 });
 
 function makeDailyDeps(overrides: Partial<DailyDeps> = {}): DailyDeps {
@@ -202,6 +252,21 @@ describe("runDaily", () => {
     expect(deps.deleteBlobQuiet).toHaveBeenCalledWith(orphanOld.url);
     expect(deps.deleteBlobQuiet).not.toHaveBeenCalledWith(orphanFresh.url);
     expect(deps.deleteBlobQuiet).not.toHaveBeenCalledWith(linked.url);
+  });
+
+  it("дорожка, на которую ссылается живая задача, переживает уборку — иначе ролик соберётся немым", async () => {
+    const music = { url: "https://x/music.mp3", uploadedAt: new Date(NOW - ORPHAN_GRACE_MS - 1) };
+    const source = { url: base.sourceUrl, uploadedAt: new Date(NOW - ORPHAN_GRACE_MS - 1) };
+    const pending = { ...base, itemId: "p", status: "pending" as const, musicUrl: music.url };
+    const deps = makeDailyDeps({
+      listItems: async () => [pending],
+      listSources: async () => [source, music],
+    });
+
+    await runDaily(deps);
+
+    expect(deps.deleteBlobQuiet).not.toHaveBeenCalledWith(music.url);
+    expect(deps.deleteBlobQuiet).not.toHaveBeenCalledWith(source.url);
   });
 
   it("исключение из checkToken говорит о недоступности проверки и не утверждает, что токен отозван", async () => {

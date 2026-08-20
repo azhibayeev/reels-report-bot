@@ -53,6 +53,11 @@ describe("parseFarmCommand", () => {
     expect(parseFarmCommand("/token@MyReelsBot")).toBe("token");
   });
 
+  it("/hooks — простая команда", () => {
+    expect(parseFarmCommand("/hooks")).toBe("hooks");
+    expect(parseFarmCommand("/HOOKS@MyReelsBot")).toBe("hooks");
+  });
+
   it("чужая команда — null", () => {
     expect(parseFarmCommand("/otchet")).toBeNull();
   });
