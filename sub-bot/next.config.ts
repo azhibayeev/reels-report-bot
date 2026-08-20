@@ -12,7 +12,10 @@ const nextConfig: NextConfig = {
       "./node_modules/ffprobe-static/bin/**",
       "./assets/**",
     ],
-    "/api/sub/start": ["./node_modules/ffprobe-static/bin/**"],
+    "/api/sub/start": [
+      "./node_modules/ffprobe-static/bin/**",
+      "./assets/glossary.ru-id.json",
+    ],
   },
 };
 
