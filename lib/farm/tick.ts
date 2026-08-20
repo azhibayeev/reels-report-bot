@@ -226,13 +226,55 @@ export async function runRenderTick(batchId: string, deps: RenderTickDeps): Prom
   }
 }
 
-// Роут возвращает 202 сразу, поэтому вызов дешёвый: он лишь запускает
-// следующее звено цепочки рендера.
-export async function triggerRender(batchId: string): Promise<void> {
+// Паузы между попытками пинка. Первая подлиннее не из вежливости: осечка,
+// которую мы лечим, — это именно не уложившаяся в лимит инициализация функции,
+// и повтору нужно дать ей время подняться, а не долбиться в тот же холодный старт.
+export const TRIGGER_BACKOFF_MS = [1000, 3000] as const;
+export const TRIGGER_ATTEMPTS = TRIGGER_BACKOFF_MS.length + 1;
+
+export interface TriggerDeps {
+  fetch?: typeof globalThis.fetch;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * Запускает следующее звено цепочки рендера. Роут отвечает 202 сразу, поэтому
+ * вызов дешёвый.
+ *
+ * Повторы здесь не перестраховка. Через эту функцию проходят все пинки — и
+ * /reels, и запуск пачки, и само-вызов тика между инвокациями, и суточный крон,
+ * — а цепочка держится ровно на них: один потерянный пинок останавливает всю
+ * пачку до следующего крона, то есть до завтра. На проде так и вышло: свежий
+ * деплой, первый запрос к /api/farm/render не уложился в лимит инициализации,
+ * вернул 500, и тринадцать готовых к сборке роликов просто повисли.
+ */
+export async function triggerRender(batchId: string, deps: TriggerDeps = {}): Promise<void> {
+  const doFetch = deps.fetch ?? globalThis.fetch;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const key = tickKey(`render:${batchId}`, requireEnv("FARM_TOKEN_SECRET"));
   const url = `${baseUrl()}/api/farm/render?batch=${encodeURIComponent(batchId)}&key=${key}`;
-  const res = await fetch(url, { method: "POST", cache: "no-store" });
-  // fetch не падает на 4xx/5xx: кривой FARM_BASE_URL или чужой ключ без этой
-  // проверки выглядели бы как успех, а цепочка рендера молча умирала бы.
-  if (!res.ok) throw new Error(`Не удалось запустить рендер: /api/farm/render вернул ${res.status}`);
+
+  let reason = "";
+  let made = 0;
+  for (let attempt = 0; attempt < TRIGGER_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) await sleep(TRIGGER_BACKOFF_MS[attempt - 1]);
+    made += 1;
+    try {
+      // fetch не падает на 4xx/5xx: кривой FARM_BASE_URL или чужой ключ без
+      // явной проверки выглядели бы как успех, а цепочка молча умирала бы.
+      const res = await doFetch(url, { method: "POST", cache: "no-store" });
+      if (res.ok) return;
+      reason = `вернул ${res.status}`;
+      // Отказ по существу (403 с чужим ключом, 404 на кривом адресе) повтором
+      // не лечится: тот же запрос даст тот же ответ. Исключения — 408 и 429,
+      // это «позже», а не «нельзя».
+      if (res.status < 500 && res.status !== 408 && res.status !== 429) break;
+    } catch (error) {
+      // Оборванное соединение неотличимо от перегрузки и лечится тем же повтором.
+      reason = (error as Error).message;
+    }
+  }
+  throw new Error(
+    `Не удалось запустить рендер: /api/farm/render ${reason} (попыток: ${made} из ${TRIGGER_ATTEMPTS})`
+  );
 }
