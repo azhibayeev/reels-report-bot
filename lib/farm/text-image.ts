@@ -61,6 +61,50 @@ export interface DrawnHook {
   png: Buffer;
   fontSize: number;
   lines: string[];
+  /** Низ блока хука в пикселях: по нему подпись-призыв понимает, куда ей нельзя. */
+  bottomY: number;
+}
+
+/**
+ * Подпись-призыв под хуком: появляется не сразу, а когда зритель уже прочёл хук,
+ * и зовёт открыть описание. Текст и момент зашиты сознательно — это часть
+ * формата, а не настройка на каждую пачку.
+ */
+export const CTA_TEXT = "(Baca keterangan)";
+// Момент появления живёт в render.ts вместе с остальной раскладкой по времени:
+// здесь он был бы вторым экземпляром одного числа, а такие пары уже расходились.
+const CTA_FONT_SIZE = 44;
+// Доля высоты кадра для подписи. Ниже середины, но заметно выше нижней кромки:
+// там Instagram рисует свой интерфейс — описание, имя аккаунта, кнопки.
+const CTA_Y = 0.62;
+// Зазор от хука. Нужен только когда хук сам стоит внизу: тогда подпись уезжает
+// под него, а не накладывается — молчаливое наложение выглядело бы как брак.
+const CTA_GAP = 40;
+
+/** Возвращает PNG во весь кадр с одной строкой призыва под хуком. */
+export function drawCtaPng(fontPath: string, hookBottomY = 0): Buffer {
+  const family = ensureFont(fontPath);
+  const canvas = createCanvas(FRAME_WIDTH, FRAME_HEIGHT);
+  const ctx = canvas.getContext("2d");
+
+  ctx.font = `${CTA_FONT_SIZE}px ${family}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.shadowColor = "rgba(0, 0, 0, 0.5)";
+  ctx.shadowOffsetX = 2;
+  ctx.shadowOffsetY = 3;
+  ctx.shadowBlur = 6;
+  ctx.strokeStyle = "black";
+  ctx.lineWidth = CTA_FONT_SIZE * STROKE_RATIO;
+  ctx.lineJoin = "round";
+  ctx.fillStyle = "white";
+
+  const y = Math.max(FRAME_HEIGHT * CTA_Y, hookBottomY + CTA_GAP);
+  ctx.strokeText(CTA_TEXT, FRAME_WIDTH / 2, y);
+  ctx.shadowColor = "transparent";
+  ctx.fillText(CTA_TEXT, FRAME_WIDTH / 2, y);
+
+  return canvas.toBuffer("image/png");
 }
 
 /**
@@ -120,5 +164,10 @@ export function drawHookPng(
     ctx.shadowColor = "rgba(0, 0, 0, 0.5)";
   });
 
-  return { png: canvas.toBuffer("image/png"), fontSize: chosen.fontSize, lines: chosen.lines };
+  return {
+    png: canvas.toBuffer("image/png"),
+    fontSize: chosen.fontSize,
+    lines: chosen.lines,
+    bottomY: top + blockHeight,
+  };
 }

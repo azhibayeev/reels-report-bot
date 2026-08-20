@@ -1,6 +1,10 @@
 {
   "crons": [
     {
+      "path": "/api/farm/sweep",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/report",
       "schedule": "45 5 * * *"
     },

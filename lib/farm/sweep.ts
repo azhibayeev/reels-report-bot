@@ -1,0 +1,48 @@
+import { batchesToKick } from "./commands";
+import { Item } from "./types";
+
+/**
+ * Будильник цепочки рендера.
+ *
+ * Раньше следующее звено запускал сам рендер — тик дорабатывал бюджет вызова и
+ * дёргал свой же роут. На длинной пачке Vercel это глушит: функция, вызывающая
+ * саму себя, ловит HTTP 508 «Loop Detected», и повторы не помогают, потому что
+ * отказ не временный, а по существу. На проде так встали три последних ролика
+ * из шестидесяти, а до этого — все тринадцать.
+ *
+ * Отсюда разделение: пинок делает отдельная функция по расписанию. Для
+ * платформы это вызов A → B, а не B → B, и защита от рекурсии не срабатывает.
+ * Само-вызов из тика остаётся быстрым путём, а это — тот, который не подведёт.
+ */
+export interface SweepDeps {
+  now: () => number;
+  listItems: () => Promise<Item[]>;
+  triggerRender: (batchId: string) => Promise<void>;
+}
+
+export interface SweepResult {
+  kicked: string[];
+  failed: { batchId: string; error: string }[];
+}
+
+export async function runSweep(deps: SweepDeps): Promise<SweepResult> {
+  // Нечитаемый список не глушим: молчаливый пустой результат выглядел бы как
+  // «работы нет», и будильник рапортовал бы об успехе, ничего не сделав.
+  const items = await deps.listItems();
+  const batches = batchesToKick(items, deps.now());
+
+  const kicked: string[] = [];
+  const failed: { batchId: string; error: string }[] = [];
+  for (const batchId of batches) {
+    try {
+      await deps.triggerRender(batchId);
+      kicked.push(batchId);
+    } catch (error) {
+      // Одна упавшая пачка не должна лишать пинка остальные: будильник —
+      // последняя линия обороны, и до следующего срабатывания они простояли бы
+      // без всякой причины.
+      failed.push({ batchId, error: (error as Error).message });
+    }
+  }
+  return { kicked, failed };
+}

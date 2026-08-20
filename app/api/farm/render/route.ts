@@ -15,7 +15,7 @@ import { tickKey } from "../../../../lib/farm/tokens";
 import { DEFAULT_POSITION, Item } from "../../../../lib/farm/types";
 import { renderHook, Runner } from "../../../../lib/farm/render";
 import { HOOK_MAX_LINES } from "../../../../lib/farm/wrap";
-import { drawHookPng } from "../../../../lib/farm/text-image";
+import { drawCtaPng, drawHookPng } from "../../../../lib/farm/text-image";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -128,6 +128,11 @@ async function renderItem(item: Item): Promise<string> {
     const overlayPath = join(dir, "hook.png");
     await writeFile(overlayPath, drawn.png);
 
+    // Подпись-призыв рисуем зная, где кончился хук: если он стоит внизу, она
+    // уедет под него, а не ляжет поверх.
+    const ctaPath = join(dir, "cta.png");
+    await writeFile(ctaPath, drawCtaPng(font, drawn.bottomY));
+
     const hasAudio = await probeHasAudio(sourcePath, ffprobe);
 
     // Дорожку тянем тем же способом, что подложку. Не скачалась — не повод
@@ -150,6 +155,7 @@ async function renderItem(item: Item): Promise<string> {
       {
         sourcePath,
         overlayPath,
+        ctaPath,
         textPaths: [],
         outPath,
         fontPath: font,

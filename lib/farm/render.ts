@@ -4,6 +4,8 @@ export interface RenderSpec {
   sourcePath: string;
   /** PNG во весь кадр с уже нарисованным хуком: накладывается фильтром overlay. */
   overlayPath?: string;
+  /** PNG с подписью-призывом: проявляется на CTA_START_SEC, а не с первого кадра. */
+  ctaPath?: string | null;
   textPaths: string[];
   outPath: string;
   fontPath: string;
@@ -41,6 +43,12 @@ function style(fontSize: number): string {
 }
 
 const POSITION_Y: Record<HookPosition, number> = { top: 0.18, center: 0.42, bottom: 0.62 };
+
+// Подпись-призыв появляется не сразу: пока зритель читает хук, она бы только
+// мешала. Проявка короткая — резкое включение на статичном кадре читается как
+// сбой склейки, а не как приём.
+export const CTA_START_SEC = 2.5;
+const CTA_FADE_SECONDS = 0.35;
 
 // Все ролики одной длины: формат из эталона заказчика, короткий ролик успевает
 // прокрутиться несколько раз, пока человек читает описание.
@@ -86,6 +94,21 @@ export function ffmpegArgs(spec: RenderSpec): string[] {
     inputs.push("-i", spec.overlayPath);
     chains.push(`[bg][${nextInput}:v]overlay=0:0[v]`);
     videoLabel = "[v]";
+    nextInput += 1;
+  }
+
+  // Подпись-призыв — отдельный вход, потому что ей нужно своё время появления.
+  // -loop 1 обязателен: без него картинка это один кадр, у fade нет шкалы
+  // времени, и проявка не наступает никогда.
+  if (spec.ctaPath && seconds > CTA_START_SEC) {
+    inputs.push("-loop", "1", "-i", spec.ctaPath);
+    chains.push(
+      `[${nextInput}:v]fade=t=in:st=${CTA_START_SEC}:d=${CTA_FADE_SECONDS}:alpha=1[cta]`
+    );
+    // enable отсекает композитинг до появления: работа, которую всё равно не
+    // видно, а на шестидесяти роликах это заметное время.
+    chains.push(`${videoLabel}[cta]overlay=0:0:enable='gte(t,${CTA_START_SEC})'[vc]`);
+    videoLabel = "[vc]";
     nextInput += 1;
   }
 
