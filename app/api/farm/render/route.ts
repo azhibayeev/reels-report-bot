@@ -7,6 +7,10 @@ import { put } from "@vercel/blob";
 import ffmpegStatic from "ffmpeg-static";
 import { after, NextRequest, NextResponse } from "next/server";
 import { deleteBlobQuiet, listItems, OUT_PREFIX, saveItem } from "../../../../lib/farm/store";
+import { queueRendered } from "../../../../lib/farm/queue";
+import { nextFreeSlot, slotConfigFromEnv } from "../../../../lib/farm/slots";
+import { loadRhythm } from "../../../../lib/farm/style";
+import { formatSlot } from "../../../../lib/farm/commands";
 import { escapeHtml } from "../../../../lib/format";
 import { sendMessage } from "../../../../lib/telegram";
 import { sendVideoWithButtons } from "../../../../lib/farm/telegram";
@@ -262,8 +266,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
+  // Регулярность из состояния важнее env: её меняют командой /rhythm без редеплоя.
+  const rhythm = await loadRhythm();
+  const slotCfg = { ...slotConfigFromEnv(), ...(rhythm ? { minutes: rhythm.minutes, perDay: rhythm.perDay } : {}) };
+
   const deps = {
     now: () => Date.now(),
+    queueRendered: (item: Item) =>
+      queueRendered(item, {
+        now: () => Date.now(),
+        listItems,
+        saveItem,
+        nextFreeSlot: (taken: string[], nowMs: number) => nextFreeSlot(taken, nowMs, slotCfg),
+      }),
+    formatSlot,
     listItems,
     saveItem,
     renderItem,

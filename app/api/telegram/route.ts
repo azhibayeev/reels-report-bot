@@ -32,6 +32,8 @@ import {
 } from "../../../lib/farm/style";
 import { answerCallback } from "../../../lib/farm/telegram";
 import { requireEnv, triggerRender } from "../../../lib/farm/tick";
+import { checkToken } from "../../../lib/farm/token";
+import { formatTokenReport } from "../../../lib/farm/token-report";
 import { BATCH_TOKEN_TTL_MS, signBatchToken } from "../../../lib/farm/tokens";
 import { fetchAllReels, fetchFollowersCount, fetchViews } from "../../../lib/instagram";
 import { getLeadLevels } from "../../../lib/leads";
@@ -76,7 +78,8 @@ const HELP =
   "/reels — сводка по ферме: апрув, очередь, сбои\n" +
   "/style верх|центр|низ — дефолтная позиция хука для будущих пачек (без аргумента — показать текущую)\n" +
   "/rhythm плотно|обычно|спокойно — регулярность выпуска (или своими числами: /rhythm 30 20)\n" +
-  "/retry [N] — вернуть в сборку сбойные ролики (по умолчанию 3)";
+  "/retry [N] — вернуть в сборку сбойные ролики (по умолчанию 3)\n" +
+  "/token — проверить ключи доступа Instagram: живы ли и хватает ли прав";
 
 // Живой замер: список рилсов + актуальные просмотры. Снапшот НЕ сохраняем,
 // чтобы не сдвигать базу ежедневного отчёта.
@@ -213,6 +216,18 @@ async function handleFarmCommand(cmd: string, text: string, opts: SendOptions, r
     }
     return true;
   }
+  if (cmd === "/token") {
+    // Значения ключей наружу не отдаём никогда — только вердикт о них.
+    const report = await formatTokenReport(
+      [
+        { label: "Заливка роликов", env: "FARM_IG_TOKEN", value: process.env.FARM_IG_TOKEN },
+        { label: "Отчёты @daristeppe", env: "IG_ACCESS_TOKEN", value: process.env.IG_ACCESS_TOKEN },
+      ],
+      { now: () => Date.now(), checkToken }
+    );
+    await sendMessage(report, opts);
+    return true;
+  }
   if (cmd === "/retry") {
     const items = await listItems();
     const broken = retryableItems(items);
@@ -341,6 +356,7 @@ export async function GET(req: NextRequest) {
         { command: "reels", description: "Сводка по ферме: апрув, очередь, сбои" },
         { command: "rhythm", description: "Регулярность выпуска роликов" },
         { command: "retry", description: "Пересобрать сбойные ролики" },
+        { command: "token", description: "Проверить ключи доступа Instagram" },
         { command: "style", description: "Дефолтная позиция хука для будущих пачек" },
       ],
     }),

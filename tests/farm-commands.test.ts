@@ -48,6 +48,11 @@ describe("parseFarmCommand", () => {
     expect(parseFarmCommand("/STYLE")).toBe("style");
   });
 
+  it("/token — простая команда", () => {
+    expect(parseFarmCommand("/token")).toBe("token");
+    expect(parseFarmCommand("/token@MyReelsBot")).toBe("token");
+  });
+
   it("чужая команда — null", () => {
     expect(parseFarmCommand("/otchet")).toBeNull();
   });
