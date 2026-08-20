@@ -55,12 +55,17 @@ function applySpellingWarning(cues: Cue[]): Cue[] {
   const message = validateSpelling(cues);
   if (!message) return cues;
 
-  let applied = false;
-  return cues.map((c) => {
-    if (applied || c.warning !== null) return c;
-    applied = true;
-    return { ...c, warning: message };
-  });
+  const freeIndex = cues.findIndex((c) => c.warning === null);
+  if (freeIndex !== -1) {
+    return cues.map((c, idx) => (idx === freeIndex ? { ...c, warning: message } : c));
+  }
+
+  // Фикс-раунд 1, находка 2: свободной реплики может не быть вообще (у ВСЕХ
+  // уже стоит свой warning) — Ruling 2 этот случай не оговаривал. Сообщение
+  // не теряем: дописываем к warning первой реплики через разделитель, а не
+  // отбрасываем — реплика и так уже блокирует рендер, лишнего блокирования
+  // это не добавляет, а единый орфографический режим остаётся под контролем.
+  return cues.map((c, idx) => (idx === 0 ? { ...c, warning: `${c.warning}; ${message}` } : c));
 }
 
 export async function translateCues(apiKey: string, cues: Cue[]): Promise<Cue[]> {
@@ -132,8 +137,34 @@ export async function translateCues(apiKey: string, cues: Cue[]): Promise<Cue[]>
     throw new Error(`Переводчик вернул ${res.status}: ${(await res.text()).slice(0, 300)}`);
   }
 
-  const body = (await res.json()) as { choices: { message: { content: string } }[] };
-  const parsed = JSON.parse(body.choices[0].message.content) as {
+  const body = (await res.json()) as {
+    choices: { message: { content: string }; finish_reason?: string }[];
+  };
+
+  // Ответ 200 с пустым или отфильтрованным choices — рабочий сценарий на
+  // исламском просветительском контенте (модерация части религиозных
+  // примеров зафиксирована в исследовании, на которое опирается спека), а
+  // не экзотика. Без проверки здесь упал бы сырой TypeError на
+  // body.choices[0] вместо осмысленной ошибки в стиле остального модуля
+  // (Фикс-раунд 1, находка 1). Три причины различимы намеренно: "отказала
+  // модерация" и "ответ обрезался" требуют разных действий от человека.
+  if (!body.choices || body.choices.length === 0) {
+    throw new Error("Переводчик вернул пустой ответ без choices — повтори запрос");
+  }
+
+  const choice = body.choices[0];
+  if (choice.finish_reason === "content_filter") {
+    throw new Error(
+      "Модель отказалась переводить по модерации — дело в содержании ролика, а не в ключе или сети. Впиши перевод этих реплик руками."
+    );
+  }
+  if (choice.finish_reason === "length") {
+    throw new Error(
+      "Ответ модели обрезан по лимиту длины (finish_reason: length) — сократи число реплик за один вызов или увеличь лимит токенов."
+    );
+  }
+
+  const parsed = JSON.parse(choice.message.content) as {
     items: { i: number; id: string }[];
   };
 

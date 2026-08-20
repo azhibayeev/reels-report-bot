@@ -126,3 +126,103 @@ describe("translateCues", () => {
     expect(out[0].warning).toMatch(/руками/);
   });
 });
+
+// Фикс-раунд 1 (ревью координатора после первой сдачи): две находки, обе
+// про потерю сигнала на ответе модели, не про Critical/Important.
+describe("Фикс-раунд 1", () => {
+  // Находка 1: body.choices[0].message.content читался без проверки, что
+  // choices вообще не пустой. На исламском просветительском контенте
+  // отказ модели по модерации — рабочий сценарий, а не экзотика, и раньше
+  // он падал сырым TypeError вместо осмысленной ошибки в стиле остального
+  // модуля.
+  const rawReply = (payload: unknown) =>
+    vi.fn().mockResolvedValue({
+      ok: true, status: 200,
+      json: async () => payload,
+      text: async () => "",
+    });
+
+  it("пустой choices в ответе — понятная ошибка, а не сырой TypeError", async () => {
+    vi.stubGlobal("fetch", rawReply({ choices: [] }));
+    await expect(translateCues("k", [cue(1, "Читай дуа")])).rejects.toThrow(/choices|пуст/i);
+  });
+
+  it("отказ модели по модерации (finish_reason: content_filter) — отдельная понятная ошибка", async () => {
+    vi.stubGlobal(
+      "fetch",
+      rawReply({ choices: [{ finish_reason: "content_filter", message: { content: "" } }] })
+    );
+    await expect(translateCues("k", [cue(1, "Читай дуа")])).rejects.toThrow(/модерац/i);
+  });
+
+  it("ответ обрезан по длине (finish_reason: length) — ошибка отличима от отказа по модерации", async () => {
+    vi.stubGlobal(
+      "fetch",
+      rawReply({ choices: [{ finish_reason: "length", message: { content: "" } }] })
+    );
+    await expect(translateCues("k", [cue(1, "Читай дуа")])).rejects.toThrow(/обрез|length/i);
+  });
+
+  it("отказ по модерации и обрезание различаются текстом ошибки", async () => {
+    let contentFilterMsg = "";
+    let lengthMsg = "";
+    vi.stubGlobal(
+      "fetch",
+      rawReply({ choices: [{ finish_reason: "content_filter", message: { content: "" } }] })
+    );
+    try {
+      await translateCues("k", [cue(1, "Читай дуа")]);
+    } catch (e) {
+      contentFilterMsg = String(e);
+    }
+    vi.unstubAllGlobals();
+    vi.stubGlobal(
+      "fetch",
+      rawReply({ choices: [{ finish_reason: "length", message: { content: "" } }] })
+    );
+    try {
+      await translateCues("k", [cue(1, "Читай дуа")]);
+    } catch (e) {
+      lengthMsg = String(e);
+    }
+    expect(contentFilterMsg).not.toBe(lengthMsg);
+  });
+
+  // Находка 2: сообщение validateSpelling терялось молча, если у ВСЕХ
+  // переведённых реплик уже стоял свой warning — Ruling 2 такой случай не
+  // оговаривал. Три реплики ниже гарантированно получают свой warning
+  // независимо друг от друга (первая — forbidden "dua", вторая и третья —
+  // экстремально короткая длительность даёт превышение знаков в секунду),
+  // и только СВЕРХ ЭТОГО между второй и третьей есть конфликт написания
+  // adzan/azan — термин, у которого в глоссарии нет своей записи, так что
+  // per-cue validateCue его в одиночку не ловит.
+  it("если свободной реплики нет, конфликт написания дописывается к warning первой реплики, а не теряется", async () => {
+    const cueFast = (i: number, ru: string): Cue => ({
+      i, start: i, end: i + 0.05, ru, id: null, needsManual: false, warning: null,
+    });
+    vi.stubGlobal(
+      "fetch",
+      reply([
+        { i: 1, id: "Bacalah dua" },
+        { i: 2, id: "Adzan pertama hari ini sekarang" },
+        { i: 3, id: "Setelah azan sekarang ini juga" },
+      ])
+    );
+    const out = await translateCues("k", [
+      cue(1, "Читай дуа"),
+      cueFast(2, "Первый азан"),
+      cueFast(3, "После азана"),
+    ]);
+
+    // Все три реплики уже пришли с непустым warning — свободной нет.
+    expect(out[0].warning).not.toBeNull();
+    expect(out[1].warning).not.toBeNull();
+    expect(out[2].warning).not.toBeNull();
+
+    // Исходное предупреждение первой реплики (forbidden "dua") сохранилось...
+    expect(out[0].warning).toMatch(/dua/);
+    // ...и конфликт написания adzan/azan виден, а не потерян.
+    expect(out[0].warning).toMatch(/adzan/i);
+    expect(out[0].warning).toMatch(/azan/i);
+  });
+});
