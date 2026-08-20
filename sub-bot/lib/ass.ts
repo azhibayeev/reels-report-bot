@@ -1,4 +1,5 @@
-import { Cue, fitLines, SUBTITLE_FONTSIZE } from "./cues";
+import { fitLines, SUBTITLE_FONTSIZE } from "./cues";
+import type { Cue } from "./cues";
 
 // Округление сотых выполняется ОДИН РАЗ, до разбора на часы/минуты/секунды,
 // а не после отдельного округления дробной части. Наивный вариант
@@ -8,6 +9,16 @@ import { Cue, fitLines, SUBTITLE_FONTSIZE } from "./cues";
 // теряя точность. round-then-decompose переносит перенос в секунды/минуты/
 // часы сам, через целочисленное деление — специального случая не нужно.
 export function assTime(sec: number): string {
+  // NaN/±Infinity молча превратились бы в "NaN:NaN:NaN.NaN" или
+  // "Infinity:NaN:NaN.NaN" внутри строки Dialogue: — испорченный .ass
+  // либо даёт пустые субтитры, либо ffmpeg отказывается его читать, и
+  // источник проблемы искать потом долго. Лучше упасть тут же, с понятным
+  // сообщением и самим значением. Отрицательные конечные числа — это не
+  // порча данных, а нормальный случай (клампится ниже), поэтому не
+  // отвергаются.
+  if (!Number.isFinite(sec)) {
+    throw new Error(`assTime: ожидалось конечное число секунд, получено ${sec}`);
+  }
   const totalCs = Math.round(Math.max(0, sec) * 100);
   const cc = totalCs % 100;
   const totalSec = Math.floor(totalCs / 100);

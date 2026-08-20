@@ -28,6 +28,18 @@ describe("assTime", () => {
   it("перенос сотых при округлении тянет за собой час (3599.999с)", () => {
     expect(assTime(3599.999)).toBe("1:00:00.00");
   });
+
+  it("бросает понятную ошибку на NaN, а не тихо печатает NaN:NaN:NaN.NaN", () => {
+    expect(() => assTime(NaN)).toThrow(/NaN/);
+  });
+
+  it("бросает понятную ошибку на Infinity, а не тихо печатает Infinity:NaN:NaN.NaN", () => {
+    expect(() => assTime(Infinity)).toThrow(/Infinity/);
+  });
+
+  it("бросает понятную ошибку и на -Infinity", () => {
+    expect(() => assTime(-Infinity)).toThrow(/Infinity/);
+  });
 });
 
 describe("escapeText", () => {
