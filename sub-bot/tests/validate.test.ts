@@ -114,6 +114,47 @@ describe("validateCue", () => {
   });
 });
 
+// Фикс-раунд 1 (ревью координатора после первой сдачи): три находки в
+// containsTerm/финальной SAW-проверке, все унаследованы из кода брифа.
+describe("Фикс-раунд 1", () => {
+  it("находка 1: термин с дефисом и апострофом (Al-Qur'an) засчитывается", () => {
+    // Раньше дефис вырезался только из ТЕРМИНА ("Al-Qur'an" → "alqur'an"),
+    // а из текста — никогда, поэтому термин «Коран» не засчитывался ни
+    // одним переводом. Нормализация теперь одна для обеих сторон.
+    expect(validateCue(cue("Читай Коран", "Bacalah Al-Qur'an setiap hari"), G)).toBeNull();
+  });
+
+  it("находка 2: строчный saw не засчитывается за салляват", () => {
+    // containsTerm регистронезависима (верно для терминов вообще), поэтому
+    // "nabi muhammad saw" проходит общую проверку термина. Ловит именно
+    // финальная SAW-проверка — она регистрочувствительна, но раньше не
+    // срабатывала из-за \b вокруг кириллицы в /\b(пророк|мухаммад)/i.
+    expect(validateCue(cue("Пророк сказал", "nabi muhammad saw bersabda"), G)).not.toBeNull();
+    expect(validateCue(cue("Пророк сказал", "nabi muhammad saw bersabda"), G)).toMatch(/SAW/);
+  });
+
+  it("находка 2: перевод с заглавным SAW валиден", () => {
+    expect(validateCue(cue("Пророк сказал", "Nabi Muhammad SAW bersabda"), G)).toBeNull();
+  });
+
+  it("находка 3: melayat не засчитывается за корень ayat — совпадение не на морфемной границе", () => {
+    // "melayat" = "me" + "layat" ("навестить с соболезнованием"), а не
+    // "me" + "ayat". Голая подстрока "ayat" технически внутри слова есть,
+    // но не на границе приставка+корень, поэтому matchesRoot её не примет.
+    const msg = validateCue(cue("Прочти этот аят", "Kita akan melayat ke rumah duka"), G);
+    expect(msg).not.toBeNull();
+    expect(msg).toMatch(/ayat/);
+  });
+
+  it("аффиксация продолжает работать после переписывания containsTerm: berdoalah засчитывается за doa", () => {
+    expect(validateCue(cue("Читай дуа", "Berdoalah kepada Allah"), G)).toBeNull();
+  });
+
+  it("berdua не путается с запрещённым dua — нормализация не сломала границу слова", () => {
+    expect(validateCue(cue("Они вдвоём", "Mereka berdua"), G)).toBeNull();
+  });
+});
+
 describe("validateSpelling", () => {
   it("ловит два режима написания в одном ролике", () => {
     const cues = [cue("а", "Bacalah sholat"), { ...cue("б", "Setelah salat"), i: 2 }];

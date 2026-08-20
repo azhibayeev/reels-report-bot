@@ -2,14 +2,56 @@ import { Cue, LINE_MAX_PX, MAX_CPS, SUBTITLE_FONTSIZE, fitLines } from "./cues";
 import { measureWidth } from "./textwidth";
 import { Entry, relevant } from "./glossary";
 
+// Одна нормализация для ОБЕИХ сторон сравнения (термин и проверяемый
+// текст): нижний регистр, вырезать только дефис и апостроф. Раньше дефис
+// вырезался ТОЛЬКО из термина ("Al-Qur'an" → "alqur'an"), а текст с
+// дефисом на месте — никогда, поэтому термин "Коран" не засчитывался ни
+// одним переводом (найдено ревью, Фикс-раунд 1, находка 1). Ничего,
+// кроме дефиса и апострофа, из слов не выбрасываем — остальная
+// пунктуация и пробелы нужны, чтобы отличать однословные термины от
+// многословных и резать текст на слова.
+function normalize(s: string): string {
+  return s.toLowerCase().replace(/[-']/g, "");
+}
+
+// Индонезийские приставки и суффиксы (без грамматического разбора,
+// просто конечный список форм из брифа): doa → berdoa, berdoalah, doanya.
+const PREFIXES = [
+  "", "ber", "be", "me", "mem", "men", "meng", "meny",
+  "pe", "pem", "pen", "peng", "di", "ter", "se", "ke",
+];
+const SUFFIXES = ["", "kan", "i", "nya", "lah", "an", "ku", "mu"];
+
+// Слово засчитывается за корень, только если оно СОБИРАЕТСЯ из
+// приставка? + корень + суффикс? целиком, без остатка. Это отличает
+// "berdoalah" (ber + doa + lah — совпадение) от "melayat" (me + layat —
+// remainder "layat" не начинается с корня "ayat", совпадения нет: корень
+// не на морфемной границе, а просто где-то внутри слова).
+function matchesRoot(word: string, root: string): boolean {
+  for (const p of PREFIXES) {
+    if (!word.startsWith(p)) continue;
+    const afterPrefix = word.slice(p.length);
+    if (!afterPrefix.startsWith(root)) continue;
+    const afterRoot = afterPrefix.slice(root.length);
+    if (SUFFIXES.includes(afterRoot)) return true;
+  }
+  return false;
+}
+
 // Индонезийская аффиксация: doa → berdoa, berdoalah, doanya. Прямое
-// совпадение подстроки дало бы ложные срабатывания, поэтому термин
-// ищется как корень внутри слова, а запрещённые варианты — строго
-// по границам слова.
+// совпадение подстроки (регэксп "везде внутри слова") дало бы ложные
+// срабатывания вроде "ayat" внутри "melayat" ("навестить с
+// соболезнованием" — к аяту отношения не имеет), поэтому термин ищется
+// по морфемной границе через matchesRoot, а не как произвольная
+// подстрока. Многословные термины ("insya Allah", "Nabi Muhammad SAW")
+// аффиксации не подвержены — для них ищем нормализованную фразу целиком.
 function containsTerm(text: string, term: string): boolean {
-  const t = term.toLowerCase().replace(/[^a-z' ]/g, "");
-  if (!t) return false;
-  return new RegExp(`[a-z]*${escapeRe(t)}[a-z]*`, "i").test(text.toLowerCase());
+  const normTerm = normalize(term);
+  if (!normTerm) return false;
+  const normText = normalize(text);
+  if (normTerm.includes(" ")) return normText.includes(normTerm);
+  const words = normText.split(/[^a-z]+/).filter(Boolean);
+  return words.some((w) => matchesRoot(w, normTerm));
 }
 
 function containsWord(text: string, word: string): boolean {
@@ -19,6 +61,16 @@ function containsWord(text: string, word: string): boolean {
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+
+// \b в JS размечает границы только по ASCII \w — кириллица в него не
+// входит, поэтому /\b(пророк|мухаммад)/i никогда не совпадала (тот же
+// баг, что чинился в lib/sacred.ts, Фикс-раунд 1, находка 2). Эта
+// проверка — подстраховка НА СЛУЧАЙ, когда containsTerm выше уже принял
+// строчный "saw" как совпадение с термином "Nabi Muhammad SAW" (термин
+// регистронезависим по конструкции — это верно для терминов вообще, но
+// не для аббревиатуры SAW): без рабочей границы подстраховка молчала, и
+// "nabi muhammad saw bersabda" проходило без требования заглавных букв.
+const PROROK_RE = /(?<![\p{L}\p{N}])(пророк|мухаммад)(?![\p{L}\p{N}])/iu;
 
 export function validateCue(cue: Cue, entries: Entry[]): string | null {
   const id = cue.id;
@@ -58,7 +110,9 @@ export function validateCue(cue: Cue, entries: Entry[]): string | null {
     }
   }
 
-  if (/\b(пророк|мухаммад)/i.test(cue.ru) && !/\bSAW\b/.test(id)) {
+  // Сама проверка SAW регистрочувствительна (без /i) намеренно: строчное
+  // "saw" — обычное индонезийское слово, не салляват.
+  if (PROROK_RE.test(cue.ru) && !/\bSAW\b/.test(id)) {
     return "упомянут Пророк, но нет SAW";
   }
   return null;
