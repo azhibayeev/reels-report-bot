@@ -16,8 +16,9 @@
 - Формат коммитов: `тип(scope): описание в повелительном наклонении`, например `feat(sub-bot): собрать реплики из слов Scribe`. Scope для всех задач — `sub-bot`.
 - Тесты — vitest, запуск `npm test` из каталога `sub-bot/`. Внешние вызовы (`fetch`, Blob, spawn) всегда мокаются; ffmpeg в тестах не запускается никогда.
 - Длительность ролика: потолок **61.0 секунды**, проверяется и в браузере, и через `ffprobe`.
-- Геометрия субтитра: ≤ 42 знака на блок, ≤ 2 строки, ≤ 21 знак в строке, длительность блока 0.9–2.6 с, ≤ 17 знаков в секунду, зазор между блоками 100 мс.
-- Стиль `.ass` — ровно тот, что в спеке: `PlayResX 1080`, `PlayResY 1920`, `WrapStyle 2`, `ScaledBorderAndShadow yes`, `Fontsize 64`, `Bold 0`, `BorderStyle 1`, `Outline 6.5`, `Shadow 2`, `Alignment 2`, `MarginL/R 130`, `MarginV 480`.
+- Геометрия субтитра: **ширина строки ≤ 820 px по измеренной метрике шрифта** (счёт знаков — только прикидка), ≤ 2 строки на блок, длительность блока 0.9–2.6 с, ≤ 17 знаков в секунду, зазор между блоками 100 мс.
+- Стиль `.ass` — ровно тот, что в спеке: `PlayResX 1080`, `PlayResY 1920`, `WrapStyle 2`, `ScaledBorderAndShadow yes`, **`Fontsize 106`**, `Bold 0`, `BorderStyle 1`, `Outline 6.5`, `Shadow 2`, `Alignment 2`, `MarginL/R 130`, `MarginV 480`.
+- Нормировка кегля в libass: `Fontsize` делится на `(usWinAscent + usWinDescent) / unitsPerEm`, у этого шрифта — 1.652. Любой расчёт размера в пикселях обязан учитывать этот множитель.
 - Салляват пишется словесной формой `SAW`. Лигатура U+FDFA запрещена: глифа нет в шрифте, HarfBuzz нет в сборке.
 - SHA256 линуксового бинарника ffmpeg: `e7e7fb30477f717e6f55f9180a70386c62677ef8a4d4d1a5d948f4098aa3eb99`. Тег релиза `b6.1.1` версию не отражает — внутри ffmpeg 7.0.2.
 - Переменные окружения: `TELEGRAM_SUB_BOT_TOKEN`, `TELEGRAM_ALLOWED_CHAT_IDS`, `TELEGRAM_WEBHOOK_SECRET`, `ELEVENLABS_API_KEY`, `OPENAI_API_KEY`, `SUB_TOKEN_SECRET`, `SUB_BASE_URL`, `CRON_SECRET`, `BLOB_READ_WRITE_TOKEN`. Необязательные: `SUB_FFMPEG_PATH`, `SUB_FFPROBE_PATH`, `SUB_FONT_PATH`.
