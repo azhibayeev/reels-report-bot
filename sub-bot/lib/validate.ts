@@ -3,15 +3,30 @@ import { measureWidth } from "./textwidth";
 import { Entry, relevant } from "./glossary";
 
 // Одна нормализация для ОБЕИХ сторон сравнения (термин и проверяемый
-// текст): нижний регистр, вырезать только дефис и апостроф. Раньше дефис
-// вырезался ТОЛЬКО из термина ("Al-Qur'an" → "alqur'an"), а текст с
-// дефисом на месте — никогда, поэтому термин "Коран" не засчитывался ни
-// одним переводом (найдено ревью, Фикс-раунд 1, находка 1). Ничего,
-// кроме дефиса и апострофа, из слов не выбрасываем — остальная
-// пунктуация и пробелы нужны, чтобы отличать однословные термины от
-// многословных и резать текст на слова.
+// текст): нижний регистр, апострофы вырезать, дефисы ЗАМЕНИТЬ пробелом
+// (не вырезать), повторные пробелы схлопнуть. Раньше дефис вырезался
+// ТОЛЬКО из термина ("Al-Qur'an" → "alqur'an"), а текст с дефисом на
+// месте — никогда, поэтому термин "Коран" не засчитывался ни одним
+// переводом (Фикс-раунд 1, находка 1). Дальше выяснилось, что вырезание
+// дефиса ПОЛНОСТЬЮ (не заменой на пробел) — само по себе регрессия:
+// индонезийская редупликация "ayat-ayat" схлопывалась в нечленимое
+// "ayatayat", которое не собирается ни из какой пары приставка+корень
+// (Фикс-раунд 2, находка 4). Замена на пробел превращает "ayat-ayat" в
+// два токена "ayat ayat", каждый чисто матчится корнем как обычное слово.
 function normalize(s: string): string {
-  return s.toLowerCase().replace(/[-']/g, "");
+  return s
+    .toLowerCase()
+    .replace(/'/g, "")
+    .replace(/-/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Текст режется на токены отдельной функцией (не просто .split(" ")),
+// чтобы случайная пунктуация, прилипшая к слову (запятая, точка), не
+// ломала сравнение — non-a-z считается разделителем наравне с пробелом.
+function tokenize(s: string): string[] {
+  return s.split(/[^a-z]+/).filter(Boolean);
 }
 
 // Индонезийские приставки и суффиксы (без грамматического разбора,
@@ -43,15 +58,27 @@ function matchesRoot(word: string, root: string): boolean {
 // срабатывания вроде "ayat" внутри "melayat" ("навестить с
 // соболезнованием" — к аяту отношения не имеет), поэтому термин ищется
 // по морфемной границе через matchesRoot, а не как произвольная
-// подстрока. Многословные термины ("insya Allah", "Nabi Muhammad SAW")
-// аффиксации не подвержены — для них ищем нормализованную фразу целиком.
+// подстрока.
+//
+// Многословные термины ("insya Allah", "Nabi Muhammad SAW", "Al-Qur'an" →
+// "al quran") засчитываются двумя способами: (1) их слова встречаются в
+// тексте ПОДРЯД — обычное раздельное написание; (2) термин со снятыми
+// пробелами матчится как ОДИН токен по правилам корня — это покрывает
+// слитное написание вроде "Alquran" (Фикс-раунд 2, находка 4).
 function containsTerm(text: string, term: string): boolean {
-  const normTerm = normalize(term);
-  if (!normTerm) return false;
-  const normText = normalize(text);
-  if (normTerm.includes(" ")) return normText.includes(normTerm);
-  const words = normText.split(/[^a-z]+/).filter(Boolean);
-  return words.some((w) => matchesRoot(w, normTerm));
+  const termTokens = tokenize(normalize(term));
+  if (termTokens.length === 0) return false;
+  const textTokens = tokenize(normalize(text));
+
+  if (termTokens.length === 1) {
+    return textTokens.some((w) => matchesRoot(w, termTokens[0]));
+  }
+
+  for (let i = 0; i + termTokens.length <= textTokens.length; i++) {
+    if (termTokens.every((t, j) => textTokens[i + j] === t)) return true;
+  }
+  const merged = termTokens.join("");
+  return textTokens.some((w) => matchesRoot(w, merged));
 }
 
 function containsWord(text: string, word: string): boolean {

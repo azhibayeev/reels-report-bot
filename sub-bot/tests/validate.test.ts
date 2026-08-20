@@ -155,6 +155,42 @@ describe("Фикс-раунд 1", () => {
   });
 });
 
+// Фикс-раунд 2 (перепроверка после фикс-раунда 1): находка 4 — регрессия,
+// внесённая самим фикс-раундом 1. normalize() вырезала дефис ПОЛНОСТЬЮ, а
+// matchesRoot требует точной сборки приставка?+корень+суффикс?.
+// Индонезийская редупликация ("ayat-ayat" — штатное множественное число)
+// схлопывалась в нечленимое "ayatayat" и переставала засчитываться, хотя
+// до фикс-раунда 1 "doa-doa" проходило. Решение: дефис заменяется
+// ПРОБЕЛОМ (не вырезается), текст режется на токены — тогда
+// "ayat-ayat" → два токена "ayat ayat", каждый чисто матчится корнем.
+describe("Фикс-раунд 2", () => {
+  it("находка 4: редупликация ayat-ayat засчитывается за корень ayat", () => {
+    expect(validateCue(cue("Читай эти аяты", "Bacalah ayat-ayat suci ini"), G)).toBeNull();
+  });
+
+  it("находка 4: редупликация doa-doa засчитывается за корень doa", () => {
+    expect(validateCue(cue("Читай дуа", "Bacalah doa-doa ini"), G)).toBeNull();
+  });
+
+  it("находка 4: редупликация surah-surah засчитывается за корень surah", () => {
+    expect(validateCue(cue("Читай суру", "Baca surah-surah pendek"), G)).toBeNull();
+  });
+
+  it("находка 4: редупликация несвязанного слова (anak-anak) не мешает проверке термина рядом", () => {
+    // "anak-anak" (дети) не входит в глоссарий — тест на то, что дефисное
+    // редуплицированное слово где угодно в реплике не роняет токенизацию
+    // и не создаёт побочных ложных срабатываний для термина doa рядом.
+    expect(validateCue(cue("Читай дуа", "Bacalah doa untuk anak-anak"), G)).toBeNull();
+  });
+
+  it("находка 4: три написания Корана — с дефисом, без апострофа, слитно — все проходят", () => {
+    expect(validateCue(cue("Читай Коран", "Bacalah Al-Qur'an setiap hari"), G)).toBeNull();
+    expect(validateCue(cue("Читай Коран", "Bacalah Al-Quran setiap hari"), G)).toBeNull();
+    expect(validateCue(cue("Читай Коран", "Bacalah Alquran setiap hari"), G)).toBeNull();
+  });
+
+});
+
 describe("validateSpelling", () => {
   it("ловит два режима написания в одном ролике", () => {
     const cues = [cue("а", "Bacalah sholat"), { ...cue("б", "Setelah salat"), i: 2 }];
