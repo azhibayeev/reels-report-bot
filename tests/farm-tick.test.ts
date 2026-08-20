@@ -116,7 +116,11 @@ describe("runRenderTick", () => {
     expect(saved.status).toBe("failed");
     expect(saved.renderingAt).toBeNull();
     expect(saved.error).toContain("ffmpeg сломался");
-    expect(deps.notify).toHaveBeenCalledWith(expect.stringContaining("1/3"), item.threadId);
+    expect(deps.notify).toHaveBeenCalledWith(
+      expect.stringContaining("1/3"),
+      item.threadId,
+      item.chatId
+    );
     // pickNext на следующем витке цикла уже ничего не находит — цикл завершился сам.
     expect(deps.triggerRender).not.toHaveBeenCalled();
   });

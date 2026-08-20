@@ -72,7 +72,7 @@ describe("C: runRenderTick после успешной отправки карт
 
     const saved = store.get("i1")!;
     expect(saved.status).toBe("failed");
-    expect(deps.notify).toHaveBeenCalledWith(expect.stringContaining("не собрался"), null);
+    expect(deps.notify).toHaveBeenCalledWith(expect.stringContaining("не собрался"), null, expect.any(Number));
     // Карточка с кнопками уже улетела в чат — ролик реально готов, а помечен как несобранный.
     expect(deps.sendVideoWithButtons).toHaveBeenCalledTimes(1);
   });
