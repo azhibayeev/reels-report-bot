@@ -86,7 +86,7 @@ describe("buildTargetUrl", () => {
   it("switches iPhones to the App Store campaign link once iOS is live", () => {
     const url = buildTargetUrl("ios", "bara", IOS_LIVE)!;
     const q = new URL(url).searchParams;
-    expect(url.startsWith("https://apps.apple.com/id/app/id6743374163")).toBe(true);
+    expect(url.startsWith("https://apps.apple.com/id/app/id6760942823")).toBe(true);
     expect(q.get("ct")).toBe("bara");
     expect(q.get("pt")).toBe("123456789");
     expect(q.get("mt")).toBe("8");
@@ -96,7 +96,7 @@ describe("buildTargetUrl", () => {
     // pt выдаётся в App Store Connect; пока его нет, ссылка обязана вести в стор,
     // просто без разбивки по источнику в отчётах Apple.
     const url = buildTargetUrl("ios", "bara", { ...IOS_PENDING, iosLive: true })!;
-    expect(url.startsWith("https://apps.apple.com/id/app/id6743374163")).toBe(true);
+    expect(url.startsWith("https://apps.apple.com/id/app/id6760942823")).toBe(true);
     expect(new URL(url).searchParams.get("pt")).toBeNull();
     expect(new URL(url).searchParams.get("ct")).toBe("bara");
   });

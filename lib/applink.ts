@@ -5,8 +5,11 @@
 
 export type Platform = "android" | "ios" | "other";
 
+// Оба листинга принадлежат TOO «Galamat Tech» — проверено по разработчику в сторах.
+// Внимание: в App Store есть похожее по названию чужое приложение «Quran Focus &
+// Habit by Qurany» (id 6743374163, Lineups Inc) — это НЕ мы.
 export const PLAY_PACKAGE = "com.qurany.app";
-export const APPSTORE_ID = "6743374163";
+export const APPSTORE_ID = "6760942823";
 /** Кампания одна на всех амбассадоров; людей различает utm_source / ct. */
 export const CAMPAIGN = "ambassador";
 
@@ -55,9 +58,9 @@ export function buildTargetUrl(platform: Platform, slug: string, cfg: AppLinkCon
     );
   }
   if (platform === "ios") {
-    // Пока приложения в App Store нет, вести туда людей нельзя: по нашему id
-    // лежит чужой билд. Отправляем их в комьюнити — там та же воронка, и метка
-    // источника сохраняется, так что iPhone-трафик не пропадает из учёта.
+    // Страховка на случай, когда iOS-версии ещё нет: вместо пустого стора
+    // отправляем человека в комьюнити, сохраняя метку источника, — иначе
+    // iPhone-трафик амбассадора просто пропадёт.
     if (!cfg.iosLive) {
       const url = new URL(cfg.iosFallbackUrl);
       url.searchParams.set("utm_source", slug);
