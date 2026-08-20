@@ -5,6 +5,15 @@ import { useState } from "react";
 
 type Stage = "idle" | "uploading" | "starting" | "done" | "error";
 
+// Совпадает с MAX_DURATION_SEC в lib/media.ts: телефонные экспорты
+// «минутного» ролика сплошь дают 60.03–60.5 с (переменный битрейт, округление
+// контейнера), и жёсткая шестидесятка отфутболила бы нормальные ролики.
+// Значение не импортируется из lib/media.ts напрямую — тот модуль тянет
+// node:fs через lib/binaries.ts и не должен попасть в клиентский бандл.
+// Финальная правда всё равно за ffprobe на сервере (Task 12): эта проверка —
+// быстрый отказ до загрузки тяжёлого файла, а не единственная защита.
+const MAX_DURATION_SEC = 61.0;
+
 // Длительность нужна дальнейшей обработке. На части .MOV браузер её не отдаёт —
 // тогда просто не показываем её, а не блокируем загрузку.
 function readDuration(file: File): Promise<number> {
@@ -38,6 +47,8 @@ export default function UploadForm({ token }: { token: string }) {
   const [stage, setStage] = useState<Stage>("idle");
   const [message, setMessage] = useState("");
 
+  const tooLong = durationSec > MAX_DURATION_SEC;
+
   async function onPick(picked: File | null) {
     setFile(picked);
     setStage("idle");
@@ -46,7 +57,7 @@ export default function UploadForm({ token }: { token: string }) {
   }
 
   async function onSubmit() {
-    if (!file) return;
+    if (!file || tooLong) return;
     try {
       setStage("uploading");
       const blob = await upload(`sub/sources/${Date.now()}-${file.name}`, file, {
@@ -81,12 +92,17 @@ export default function UploadForm({ token }: { token: string }) {
         disabled={stage === "uploading" || stage === "starting"}
       />
 
-      {file && durationSec > 0 && <p>Длительность {formatDuration(durationSec)}.</p>}
+      {file && durationSec > 0 && !tooLong && <p>Длительность {formatDuration(durationSec)}.</p>}
       {file && durationSec === 0 && <p>Длительность не определилась — посчитаю на сервере.</p>}
+      {file && tooLong && (
+        <p style={{ color: "crimson" }}>
+          Ролик длиннее 61 секунды ({formatDuration(durationSec)}). Обрежь и загрузи снова.
+        </p>
+      )}
 
       <button
         onClick={() => void onSubmit()}
-        disabled={!file || stage === "uploading" || stage === "starting" || stage === "done"}
+        disabled={!file || tooLong || stage === "uploading" || stage === "starting" || stage === "done"}
       >
         Загрузить
       </button>

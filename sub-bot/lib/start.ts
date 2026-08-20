@@ -17,7 +17,7 @@ export async function startJob(input: {
   token: string;
   blobUrl: string;
   durationSec: number;
-}): Promise<{ jobId: string }> {
+}): Promise<{ jobId: string; job: Job }> {
   const claim = verifyToken(input.token, requireEnv("SUB_TOKEN_SECRET"), Date.now());
   if (!claim) throw new Error("Ссылка просрочена — запроси новую через /sub");
   if (!isOwnBlobUrl(input.blobUrl)) throw new Error("Ссылка на файл не из нашего хранилища");
@@ -53,5 +53,10 @@ export async function startJob(input: {
     throw error;
   }
 
-  return { jobId: job.jobId };
+  // Возвращаем и сам объект задачи, не только jobId: вызывающий роут запускает
+  // обработку сразу же, в том же вызове функции, и не должен вычитывать
+  // только что записанный Blob обратно через loadJob — list() в Vercel Blob
+  // не гарантирует немедленную согласованность с put(), и повторное чтение
+  // тут же после записи рискует не найти файл.
+  return { jobId: job.jobId, job };
 }
