@@ -150,8 +150,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     ? "\nЦепочка рендера не стартовала — пни её командой /reels."
     : "";
   try {
+    // Тому, кто завёл пачку, а не в общий чат: см. комментарий у notify в post.ts.
     await sendMessage(`Взял пачку: ${total} роликов. Пришлю по одному с кнопками.${chainNote}`, {
       thread: claim.threadId,
+      chat: claim.chatId,
     });
   } catch (error) {
     // Пачка уже создана и рендерится: молчание в чате — не повод удалять исходники.

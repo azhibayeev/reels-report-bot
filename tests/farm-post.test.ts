@@ -110,6 +110,35 @@ describe("postOne: сломанный токен аккаунта", () => {
   });
 });
 
+describe("postOne: куда уходят сообщения", () => {
+  // Пачку заводит человек в личке, а сообщения о заливке сыпались в общий чат
+  // команды: для всех шум, а для того, кто загрузил, — молчание.
+  it("сообщение об успехе уходит в чат задачи, а не в чат по умолчанию", async () => {
+    const notify = vi.fn(async (_t: string, _thread: number | null, _chat?: number) => {});
+    const mine = { ...base, chatId: 738812437, threadId: null };
+    await postOne(mine, makeDeps({ notify, loadItem: async () => ({ ...mine }) }));
+
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Залил"), null, 738812437);
+  });
+
+  it("и сообщение о сбое тоже", async () => {
+    const notify = vi.fn(async (_t: string, _thread: number | null, _chat?: number) => {});
+    const mine = { ...base, chatId: 738812437 };
+    await postOne(
+      mine,
+      makeDeps({
+        notify,
+        loadItem: async () => ({ ...mine }),
+        createTrialContainer: async () => {
+          throw new Error("что-то сломалось");
+        },
+      })
+    );
+
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("не залился"), null, 738812437);
+  });
+});
+
 describe("postOne", () => {
   it("проходит контейнер → ожидание → публикацию, шлёт permalink в чат и удаляет videoUrl", async () => {
     const deps = makeDeps();
@@ -130,7 +159,8 @@ describe("postOne", () => {
     );
     expect(deps.notify).toHaveBeenCalledWith(
       expect.stringContaining("https://instagram.com/reel/M1"),
-      base.threadId
+      base.threadId,
+      base.chatId
     );
     expect(deps.deleteBlobQuiet).toHaveBeenCalledWith(base.videoUrl);
   });
@@ -220,7 +250,7 @@ describe("postOne", () => {
     expect(deps.saveItem).toHaveBeenLastCalledWith(
       expect.objectContaining({ status: "failed", postingAt: null, error: expect.stringContaining("quota") })
     );
-    expect(deps.notify).toHaveBeenCalledWith(expect.stringContaining("quota"), base.threadId);
+    expect(deps.notify).toHaveBeenCalledWith(expect.stringContaining("quota"), base.threadId, base.chatId);
     expect(deps.deleteBlobQuiet).not.toHaveBeenCalled();
   });
 

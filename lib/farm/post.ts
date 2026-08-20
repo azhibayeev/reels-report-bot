@@ -15,7 +15,12 @@ export interface PostDeps {
   publishContainer: (containerId: string) => Promise<string>;
   fetchPermalink: (mediaId: string) => Promise<string>;
   deleteBlobQuiet: (url: string) => Promise<void>;
-  notify: (text: string, threadId: number | null) => Promise<void>;
+  /**
+   * Чат обязателен третьим аргументом: пачку заводят в личке, и сыпать
+   * сообщениями о заливке в общий чат команды — шум для всех и молчание для
+   * того, кто её загрузил.
+   */
+  notify: (text: string, threadId: number | null, chatId?: number) => Promise<void>;
 }
 
 export interface PostTickDeps extends PostDeps {
@@ -132,7 +137,7 @@ async function postOneLocked(item: Item, deps: PostDeps): Promise<void> {
 
   const notifyQuiet = async (text: string) => {
     try {
-      await deps.notify(text, fresh.threadId);
+      await deps.notify(text, fresh.threadId, fresh.chatId);
     } catch (notifyError) {
       console.error("farm post notify failed", fresh.itemId, notifyError);
     }
@@ -304,6 +309,7 @@ export async function livePostTickDeps(): Promise<PostTickDeps> {
     fetchPermalink: (mediaId) => fetchPermalink(mediaId, publishDeps),
     deleteBlobQuiet,
     listItems,
-    notify: (text, threadId) => sendMessage(escapeHtml(text), { thread: threadId }),
+    notify: (text, threadId, chatId) =>
+      sendMessage(escapeHtml(text), { thread: threadId, ...(chatId ? { chat: chatId } : {}) }),
   };
 }

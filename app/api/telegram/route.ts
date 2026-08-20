@@ -44,6 +44,7 @@ import { getClicksStats, lastSprintStart } from "../../../lib/posthog";
 import { jakartaDateKey, loadPreviousSnapshot } from "../../../lib/storage";
 import { sendDocument, sendMessage, SendOptions } from "../../../lib/telegram";
 import { resolveToken } from "../../../lib/token";
+import { loadTokenState } from "../../../lib/storage";
 import { Snapshot } from "../../../lib/types";
 
 export const dynamic = "force-dynamic";
@@ -237,10 +238,21 @@ async function handleFarmCommand(cmd: string, text: string, opts: SendOptions, r
     // Значения ключей наружу не отдаём никогда — только вердикт о них.
     const report = await formatTokenReport(
       [
-        // Показываем тот ключ, которым реально пользуется заливка: сохранённый
-        // важнее переменной окружения, и отчёт про env вводил бы в заблуждение.
-        { label: "Заливка роликов", env: "сохранён командой", value: await loadFarmToken() ?? process.env.FARM_IG_TOKEN },
-        { label: "Отчёты @daristeppe", env: "IG_ACCESS_TOKEN", value: process.env.IG_ACCESS_TOKEN },
+        // Показываем тот ключ, которым РЕАЛЬНО пользуется каждая часть.
+        // Заливка: сохранённый командой важнее переменной окружения.
+        {
+          label: "Заливка роликов",
+          env: (await loadFarmToken()) ? "сохранён командой /token set" : "FARM_IG_TOKEN",
+          value: (await loadFarmToken()) ?? process.env.FARM_IG_TOKEN,
+        },
+        // Отчёты: переменная окружения — только начальное зерно. Рабочий ключ
+        // лежит в хранилище и сам продлевается раз в сутки, поэтому вердикт по
+        // env для них — ложная тревога: истёкшее зерно ничего не значит.
+        {
+          label: "Отчёты @daristeppe",
+          env: "хранилище (продлевается само)",
+          value: (await loadTokenState(DARISTEPPE))?.token ?? process.env.IG_ACCESS_TOKEN,
+        },
       ],
       { now: () => Date.now(), checkToken }
     );
