@@ -185,7 +185,11 @@ export async function runRenderTick(batchId: string, deps: RenderTickDeps): Prom
         }
         await deps.saveItem({ ...item, status: "failed", renderingAt: null, error: message, videoUrl: null });
         try {
-          await deps.notify(`Ролик ${item.index}/${item.total} не собрался: ${message}`, item.threadId);
+          await deps.notify(
+            `Ролик ${item.index}/${item.total} не собрался: ${message}`,
+            item.threadId,
+            item.chatId
+          );
         } catch (notifyError) {
           // Отвалившийся Telegram не должен обрывать пачку: остальные ролики важнее письма.
           console.error("farm notify failed", item.itemId, notifyError);

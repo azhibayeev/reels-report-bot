@@ -184,6 +184,56 @@ async function renderItem(item: Item): Promise<string> {
   }
 }
 
+const PROBE_FILTERS = ["drawtext", "aloop", "atrim", "afade", "volume", "scale", "crop", "anullsrc"];
+
+// GET с тем же ключом, что и тик: показывает, чем реально располагает сборка
+// ffmpeg на этой платформе. Локально macOS-сборка, в проде linux — наборы
+// фильтров у них разные, и «Filter not found» иначе приходится угадывать.
+export async function GET(req: NextRequest): Promise<NextResponse> {
+  const batch = req.nextUrl.searchParams.get("batch") ?? "probe";
+  const key = req.nextUrl.searchParams.get("key");
+  if (key !== tickKey(`render:${batch}`, requireEnv("FARM_TOKEN_SECRET"))) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
+
+  const report: Record<string, unknown> = {};
+  try {
+    report.ffmpeg = ffmpegPath();
+  } catch (error) {
+    report.ffmpegError = (error as Error).message;
+  }
+  try {
+    report.ffprobe = ffprobePath();
+  } catch (error) {
+    report.ffprobeError = (error as Error).message;
+  }
+  try {
+    report.font = fontPath();
+  } catch (error) {
+    report.fontError = (error as Error).message;
+  }
+
+  if (typeof report.ffmpeg === "string") {
+    const list = await new Promise<string>((resolve) => {
+      const child = spawn(report.ffmpeg as string, ["-hide_banner", "-filters"], {
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      let out = "";
+      child.stdout.on("data", (c: Buffer) => {
+        out += c.toString();
+      });
+      child.on("error", () => resolve(""));
+      child.on("close", () => resolve(out));
+    });
+    report.filters = Object.fromEntries(
+      PROBE_FILTERS.map((name) => [name, new RegExp(`\\b${name}\\b`).test(list)])
+    );
+    report.filtersTotal = list.split("\n").length;
+  }
+
+  return NextResponse.json(report);
+}
+
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const batchId = req.nextUrl.searchParams.get("batch") ?? "";
   const key = req.nextUrl.searchParams.get("key") ?? "";
