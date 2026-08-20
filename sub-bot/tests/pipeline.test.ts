@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { runPipeline } from "../lib/pipeline";
 import type { Job } from "../lib/jobs";
+import type { Download } from "../lib/storage";
 
 const job = (): Job => ({
   jobId: "j1",
@@ -15,9 +16,16 @@ const job = (): Job => ({
   error: null,
 });
 
+// dispose — отдельный мок на каждый вызов download(), чтобы тесты могли
+// проверить, что именно он вызван (а не какой-то чужой dispose из другого
+// вызова).
+function makeDownload(path = "/tmp/src.mp4"): Download {
+  return { path, dispose: vi.fn() };
+}
+
 const deps = (over: Record<string, unknown> = {}) => ({
   probe: vi.fn().mockResolvedValue({ durationSec: 20, hasAudio: true }),
-  download: vi.fn().mockResolvedValue("/tmp/src.mp4"),
+  download: vi.fn().mockResolvedValue(makeDownload()),
   transcribe: vi.fn().mockResolvedValue([{ text: "Читай", start: 0, end: 0.5 }]),
   translate: vi.fn().mockImplementation(async (cues: { id: string }[]) =>
     cues.map((c) => ({ ...c, id: "Bacalah" }))
@@ -89,5 +97,56 @@ describe("runPipeline", () => {
     const lastSave = d.save.mock.calls[d.save.mock.calls.length - 1][0] as Job;
     expect(lastSave.status).toBe("failed");
     expect(lastSave.cues.length).toBeGreaterThan(0);
+  });
+
+  // Фикс-раунд 1, находка 1: fail() падал сам, если deps.save отказа тоже
+  // отказывал (например, Blob лёг ровно в момент обработки отказа) —
+  // runPipeline рожал необработанный reject вместо возврата failed-задачи.
+  it("если сохранение отказа тоже падает — всё равно возвращает failed, а не роняет вызов", async () => {
+    const d = deps({
+      download: vi.fn().mockRejectedValue(new Error("download failed")),
+      save: vi.fn().mockRejectedValue(new Error("blob unavailable")),
+    });
+    const out = await runPipeline(d as never, job());
+    expect(out.status).toBe("failed");
+    expect(out.error).toMatch(/download failed/);
+  });
+
+  // Фикс-раунд 1, находка 2: временный каталог из download() обязан
+  // удаляться на любом пути — и на успехе, и на отказе.
+  it("убирает временный каталог после успешного прохождения конвейера", async () => {
+    const dl = makeDownload();
+    const d = deps({ download: vi.fn().mockResolvedValue(dl) });
+    await runPipeline(d as never, job());
+    expect(dl.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("убирает временный каталог даже на отказе (например, ролик длиннее потолка)", async () => {
+    const dl = makeDownload();
+    const d = deps({
+      download: vi.fn().mockResolvedValue(dl),
+      probe: vi.fn().mockResolvedValue({ durationSec: 61.4, hasAudio: true }),
+    });
+    const out = await runPipeline(d as never, job());
+    expect(out.status).toBe("failed");
+    expect(dl.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("убирает временный каталог, даже если упавший перевод уронил конвейер в catch", async () => {
+    const dl = makeDownload();
+    const d = deps({
+      download: vi.fn().mockResolvedValue(dl),
+      translate: vi.fn().mockRejectedValue(new Error("429 rate limited")),
+    });
+    await runPipeline(d as never, job());
+    expect(dl.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("не пытается убрать каталог, если скачивание не удалось — dispose ещё не от чего звать", async () => {
+    const d = deps({ download: vi.fn().mockRejectedValue(new Error("network down")) });
+    const out = await runPipeline(d as never, job());
+    expect(out.status).toBe("failed");
+    // Явной проверки на "не бросает" достаточно — если бы код обращался к
+    // dispose несуществующего Download, вызов упал бы раньше этой строки.
   });
 });
