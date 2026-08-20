@@ -28,6 +28,18 @@ describe("renderArgs", () => {
     expect(a[a.indexOf("-vf") + 1]).toContain("a\\:b");
   });
 
+  it("экранирует апостроф в пути к .ass", () => {
+    const a = renderArgs({ ...opts, assPath: "/tmp/it's a dir/cues.ass" });
+    const vf = a[a.indexOf("-vf") + 1];
+    expect(vf).toBe(`subtitles=/tmp/it\\'s a dir/cues.ass:fontsdir=${opts.fontsDir}`);
+  });
+
+  it("экранирует апостроф и пропускает пробел в fontsdir", () => {
+    const a = renderArgs({ ...opts, fontsDir: "/var/task/font's assets" });
+    const vf = a[a.indexOf("-vf") + 1];
+    expect(vf).toBe(`subtitles=${opts.assPath}:fontsdir=/var/task/font\\'s assets`);
+  });
+
   it("ставит переданный пресет", () => {
     expect(renderArgs({ ...opts, preset: "ultrafast" })).toContain("ultrafast");
   });
