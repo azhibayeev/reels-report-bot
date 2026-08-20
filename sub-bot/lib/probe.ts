@@ -98,7 +98,15 @@ export async function runProbe(): Promise<ProbeReport> {
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        `Style: Sub,${family},64,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,6.5,2,2,130,130,480,1`,
+        // Fontsize 106, а не «визуальные» 64: libass нормирует кегль не по
+        // em-квадрату шрифта, а по его вертикальным метрикам
+        // usWinAscent + usWinDescent. У Plus Jakarta Sans это 1296 + 356 = 1652
+        // при unitsPerEm 1000 — множитель 1.652. При Fontsize 64 заглавная
+        // буква выходила высотой 28 px вместо положенных по sCapHeight 47.7 px
+        // (59% от задуманного, ниже порога «кегль не ниже 48 px» из спеки).
+        // 64 × 1.652 ≈ 106 возвращает заглавной ровно 47.7 px (Ruling 7,
+        // коммит 92e23a5). Не «исправляй» обратно на 64.
+        `Style: Sub,${family},106,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,6.5,2,2,130,130,480,1`,
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
