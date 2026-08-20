@@ -40,6 +40,56 @@ function makeDeps(items: Item[], overrides: Partial<ApproveDeps> = {}): { deps: 
 }
 
 describe("handleCallback", () => {
+  it("ролик ещё собирается — карточка НЕ теряет кнопки", async () => {
+    // Ловушка, на которую напоролись вживую. Карточка появляется в чате на
+    // мгновение раньше, чем задача помечается review: видео сначала уходит в
+    // Telegram, и только потом пишется статус. Нажатие в этот зазор попадало в
+    // ветку «не review» — человеку отвечали «Уже обработано: rendering», а
+    // клавиатуру снимали. Ролик через секунду становился годным к апруву, но
+    // жать было уже нечего: единственная карточка осталась без кнопок.
+    for (const status of ["pending", "rendering"] as const) {
+      const { deps, items } = makeDeps([{ ...base, status }]);
+      await handleCallback({ id: "cb1", data: "a:i1", chatId: -1 }, deps);
+
+      expect(deps.dropKeyboard).not.toHaveBeenCalled();
+      expect(deps.saveItem).not.toHaveBeenCalled();
+      expect(items[0].status).toBe(status);
+      const said = (deps.answerCallback as unknown as { mock: { calls: string[][] } }).mock.calls[0][1];
+      expect(said).not.toContain("Уже обработано");
+      expect(said).toMatch(/собирается|секунд/i);
+    }
+  });
+
+  it("а вот доведённый до конца ролик кнопки теряет — жать по нему больше нечего", async () => {
+    for (const status of ["queued", "posted", "rejected"] as const) {
+      const { deps } = makeDeps([{ ...base, status }]);
+      await handleCallback({ id: "cb1", data: "a:i1", chatId: -1 }, deps);
+
+      expect(deps.dropKeyboard).toHaveBeenCalledWith(base.chatId, base.messageId);
+      expect(deps.saveItem).not.toHaveBeenCalled();
+      const said = (deps.answerCallback as unknown as { mock: { calls: string[][] } }).mock.calls[0][1];
+      expect(said).toContain("Уже обработано");
+    }
+  });
+
+  it("задача исчезла между двумя чтениями — говорим об этом прямо, а не «уже обработано»", async () => {
+    // Разные беды с разными действиями: «уже обработано» значит «всё в порядке,
+    // просто дважды нажали», а пропавшая задача — это сбой, о котором надо знать.
+    let reads = 0;
+    const { deps } = makeDeps([{ ...base, status: "review" }], {
+      loadItem: async (itemId) => {
+        reads += 1;
+        return reads === 1 ? { ...base, itemId, status: "review" } : null;
+      },
+    });
+
+    await handleCallback({ id: "cb1", data: "a:i1", chatId: -1 }, deps);
+
+    const said = (deps.answerCallback as unknown as { mock: { calls: string[][] } }).mock.calls[0][1];
+    expect(said).toContain("исчез");
+    expect(deps.saveItem).not.toHaveBeenCalled();
+  });
+
   it("мусорный callback_data — отвечает и ничего не грузит", async () => {
     const { deps } = makeDeps([]);
     const loadSpy = vi.spyOn(deps, "loadItem" as never);

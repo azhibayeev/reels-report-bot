@@ -110,8 +110,28 @@ export async function handleCallback(
     return;
   }
 
+  // «Ещё не готов» и «уже поздно» — разные вещи, и путать их дорого.
+  //
+  // Карточка появляется в чате на мгновение раньше, чем задача помечается
+  // review: видео сначала уходит в Telegram, и только потом пишется статус.
+  // Нажатие в этот зазор попадало сюда же, куда и повторное нажатие по старой
+  // карточке: человеку отвечали «Уже обработано: rendering» и снимали
+  // клавиатуру. Через секунду ролик становился годным к апруву — но жать было
+  // уже нечего, единственная карточка осталась без кнопок.
+  if (item.status === "pending" || item.status === "rendering") {
+    console.warn("farm approve: нажали до готовности", item.itemId, item.status);
+    await cosmetic(
+      () => deps.answerCallback(cb.id, "Ещё собирается — нажмите через несколько секунд"),
+      "answerCallback",
+      item.itemId
+    );
+    // Клавиатуру НЕ снимаем: она понадобится через мгновение.
+    return;
+  }
+
   if (item.status !== "review") {
     // Листать чат вверх и жать повторно — норма: не трогаем статус и не пишем в стор.
+    console.warn("farm approve: карточка уже отработана", item.itemId, item.status);
     await cosmetic(() => deps.answerCallback(cb.id, `Уже обработано: ${item.status}`), "answerCallback", item.itemId);
     const messageId = item.messageId;
     if (messageId !== null) {
@@ -129,7 +149,10 @@ export async function handleCallback(
       // проход видит, что первый уже перевёл задачу в queued, и уходит без
       // saveItem.
       const fresh = await deps.loadItem(item.itemId);
-      if (!fresh || fresh.status !== "review") return null;
+      // Различаем две причины отказа: задача пропала из стора (сбой, о котором
+      // надо знать) и задачу уже обработал сосед по нажатию (штатное дело).
+      if (!fresh) return "gone";
+      if (fresh.status !== "review") return "taken";
       const taken = (await deps.listItems())
         .filter((i) => SLOT_TAKEN_STATUSES.has(i.status))
         .map((i) => i.scheduledAt)
@@ -138,10 +161,14 @@ export async function handleCallback(
       await deps.saveItem({ ...fresh, status: "queued", scheduledAt: chosen });
       return chosen;
     });
-    if (slot === null) {
-      // Задачу уже обработали (второй апрув по той же карточке) — трогать
-      // стор больше не нужно, ограничиваемся косметикой.
-      await cosmetic(() => deps.answerCallback(cb.id, "Уже обработано"), "answerCallback", item.itemId);
+    if (slot === "gone" || slot === "taken") {
+      const text =
+        slot === "gone"
+          ? "Ролик исчез из хранилища — нажмите /reels"
+          : "Уже обработано";
+      console.warn("farm approve: слот не выдан", item.itemId, slot);
+      // Стор трогать больше не нужно, ограничиваемся косметикой.
+      await cosmetic(() => deps.answerCallback(cb.id, text), "answerCallback", item.itemId);
       return;
     }
     // Статус уже записан — дальше только косметика Telegram, её отказ (карточка
