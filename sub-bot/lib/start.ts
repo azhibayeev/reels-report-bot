@@ -34,8 +34,10 @@ export async function startJob(input: {
     chatId: claim.chatId,
     sourceUrl: input.blobUrl,
     resultUrl: null,
-    status: "pending",
+    // Первый шаг конвейера — распознавание речи; его заводит уже другая задача.
+    status: "transcribing",
     durationSec: input.durationSec,
+    cues: [],
     deliveringAt: null,
     createdAt: new Date().toISOString(),
     error: null,

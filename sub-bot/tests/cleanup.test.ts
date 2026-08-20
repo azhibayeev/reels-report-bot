@@ -22,8 +22,9 @@ vi.mock("@vercel/blob", () => ({
 
 import type { Job } from "../lib/jobs";
 
-const { cleanup, hungJobs, HUNG_JOB_MESSAGE, JOB_DEADLINE_MS, RETENTION_MS, staleJobs } =
+const { cleanup, hungJobs, HUNG_JOB_MESSAGE, RETENTION_MS, staleJobs } =
   await import("../lib/cleanup");
+const { AWAITING_DEADLINE_MS, WORK_DEADLINE_MS } = await import("../lib/jobs");
 
 const NOW = Date.parse("2026-08-13T12:00:00.000Z");
 
@@ -35,6 +36,7 @@ function makeJob(overrides: Partial<Job> = {}): Job {
     resultUrl: "https://blob/result.mp4",
     status: "done",
     durationSec: 60,
+    cues: [],
     deliveringAt: null,
     createdAt: new Date(NOW).toISOString(),
     error: null,
@@ -62,7 +64,7 @@ describe("staleJobs", () => {
 
   it("не удаляет файлы активной задачи, даже если она старая", () => {
     const stuck = makeJob({
-      status: "pending",
+      status: "transcribing",
       createdAt: new Date(NOW - RETENTION_MS - 1).toISOString(),
     });
     expect(staleJobs([stuck], NOW)).toEqual([]);
@@ -80,15 +82,15 @@ describe("staleJobs", () => {
 describe("hungJobs", () => {
   it("закрывает активную задачу старше дедлайна — добивать её больше некому", () => {
     const stuck = makeJob({
-      status: "pending",
-      createdAt: new Date(NOW - JOB_DEADLINE_MS - 1).toISOString(),
+      status: "transcribing",
+      createdAt: new Date(NOW - WORK_DEADLINE_MS - 1).toISOString(),
     });
     expect(hungJobs([stuck], NOW)).toHaveLength(1);
   });
 
   it("не трогает свежую активную задачу — она ещё в работе", () => {
     const fresh = makeJob({
-      status: "pending",
+      status: "transcribing",
       createdAt: new Date(NOW - 60_000).toISOString(),
     });
     expect(hungJobs([fresh], NOW)).toEqual([]);
@@ -98,12 +100,28 @@ describe("hungJobs", () => {
     const old = makeJob({ createdAt: new Date(NOW - RETENTION_MS - 1).toISOString() });
     expect(hungJobs([old], NOW)).toEqual([]);
   });
+
+  it("не трогает awaiting дольше получаса — у неё свой, суточный дедлайн", () => {
+    const waiting = makeJob({
+      status: "awaiting",
+      createdAt: new Date(NOW - WORK_DEADLINE_MS - 1).toISOString(),
+    });
+    expect(hungJobs([waiting], NOW)).toEqual([]);
+  });
+
+  it("закрывает awaiting, простоявшую дольше суток", () => {
+    const waiting = makeJob({
+      status: "awaiting",
+      createdAt: new Date(NOW - AWAITING_DEADLINE_MS - 1).toISOString(),
+    });
+    expect(hungJobs([waiting], NOW)).toHaveLength(1);
+  });
 });
 
 describe("cleanup", () => {
   it("зависшую задачу помечает failed, пишет владельцу и удаляет исходник", async () => {
     listJobsMock.mockResolvedValue([
-      makeJob({ status: "pending", createdAt: new Date(NOW - JOB_DEADLINE_MS - 1).toISOString() }),
+      makeJob({ status: "transcribing", createdAt: new Date(NOW - WORK_DEADLINE_MS - 1).toISOString() }),
     ]);
 
     const result = await cleanup(NOW);
@@ -115,7 +133,7 @@ describe("cleanup", () => {
   });
 
   it("свежую активную задачу оставляет в покое", async () => {
-    listJobsMock.mockResolvedValue([makeJob({ status: "pending" })]);
+    listJobsMock.mockResolvedValue([makeJob({ status: "transcribing" })]);
 
     const result = await cleanup(NOW);
 

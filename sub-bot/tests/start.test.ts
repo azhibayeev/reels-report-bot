@@ -42,11 +42,11 @@ describe("isOwnBlobUrl", () => {
 });
 
 describe("startJob", () => {
-  it("создаёт задачу со статусом pending", async () => {
+  it("создаёт задачу со статусом transcribing", async () => {
     const { jobId } = await startJob({ token: freshToken(), blobUrl: BLOB, durationSec: 60 });
 
     expect(saveJobMock).toHaveBeenCalledWith(
-      expect.objectContaining({ jobId, chatId: 42, sourceUrl: BLOB, status: "pending" })
+      expect.objectContaining({ jobId, chatId: 42, sourceUrl: BLOB, status: "transcribing" })
     );
   });
 

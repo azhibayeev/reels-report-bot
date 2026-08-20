@@ -1,8 +1,18 @@
 import { del, list, put } from "@vercel/blob";
+import { Cue } from "./cues";
 
-// «delivering» — задача уже отдаётся в Telegram. Отдельный статус нужен, чтобы
-// параллельный запуск не отправил тот же ролик ещё раз.
-export type JobStatus = "pending" | "delivering" | "done" | "failed";
+// Конвейер задачи: распознавание речи → перевод → ожидание правки человеком →
+// рендер субтитров → доставка в Telegram. «delivering» — задача уже отдаётся
+// в Telegram, отдельный статус нужен, чтобы параллельный запуск не отправил
+// тот же ролик ещё раз.
+export type JobStatus =
+  | "transcribing"
+  | "translating"
+  | "awaiting"
+  | "rendering"
+  | "delivering"
+  | "done"
+  | "failed";
 
 export interface Job {
   jobId: string;
@@ -12,6 +22,8 @@ export interface Job {
   status: JobStatus;
   /** Ноль означает, что браузер не смог прочитать длительность файла. */
   durationSec: number;
+  /** Реплики субтитров: пусто до перевода, дальше — рабочая копия, которую правит человек в статусе awaiting. */
+  cues: Cue[];
   /**
    * Когда началась текущая доставка (ISO), `null` — если доставка не идёт.
    * Нужна, чтобы отличить живую доставку от брошенной: вызов функции умирает
@@ -30,10 +42,28 @@ export function jobPath(jobId: string): string {
   return `${JOBS_PREFIX}${jobId}.json`;
 }
 
+// Рабочие статусы (машина работает) умирают за полчаса. «awaiting» ждёт
+// человека — правка религиозного текста руками может занять часы, поэтому у
+// неё отдельный, суточный дедлайн. Общий тридцатиминутный порог делал бы
+// живучесть задачи лотереей: суточная уборка ходит в фиксированное время
+// (04:00 UTC), и задача, созданная в 03:00, умирала бы через час, а созданная
+// в 05:00 — жила почти сутки.
+export const WORK_DEADLINE_MS = 30 * 60 * 1000;
+export const AWAITING_DEADLINE_MS = 24 * 60 * 60 * 1000;
+
+export function deadlineMs(status: JobStatus): number {
+  return status === "awaiting" ? AWAITING_DEADLINE_MS : WORK_DEADLINE_MS;
+}
+
 export function isActive(job: Job): boolean {
-  // Доставка тоже считается работой: /status должен такую задачу показывать,
-  // а чистка — не трогать её файлы.
-  return job.status === "pending" || job.status === "delivering";
+  // Доставка и ожидание правки тоже считаются работой: /status должен такую
+  // задачу показывать, а чистка — не трогать её файлы.
+  return job.status !== "done" && job.status !== "failed";
+}
+
+export function isExpired(job: Job, nowMs: number): boolean {
+  if (!isActive(job)) return false;
+  return nowMs - Date.parse(job.createdAt) > deadlineMs(job.status);
 }
 
 export async function saveJob(job: Job): Promise<void> {

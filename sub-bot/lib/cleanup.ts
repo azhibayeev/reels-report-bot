@@ -1,10 +1,7 @@
 import { del } from "@vercel/blob";
 import { requireEnv } from "./config";
-import { deleteBlob, isActive, Job, jobPath, listJobs, saveJob } from "./jobs";
+import { deleteBlob, isActive, isExpired, Job, jobPath, listJobs, saveJob } from "./jobs";
 import { sendMessage } from "./telegram";
-
-// Дольше получаса ждать нечего: либо обработка зависла, либо ролик неподъёмный.
-export const JOB_DEADLINE_MS = 30 * 60 * 1000;
 
 // Сутки: готовый ролик к этому времени уже забран из Telegram.
 export const RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -22,11 +19,11 @@ export function staleJobs(jobs: Job[], nowMs: number): Job[] {
 }
 
 // У зависшей задачи обработка либо не запустилась, либо оборвалась молча —
-// добить её и освободить хранилище больше некому, кроме этого cron.
+// добить её и освободить хранилище больше некому, кроме этого cron. Порог
+// просрочки не общий: у «awaiting» он суточный (ждёт правки человеком), у
+// остальных активных статусов — получасовой (см. deadlineMs в lib/jobs.ts).
 export function hungJobs(jobs: Job[], nowMs: number): Job[] {
-  return jobs.filter(
-    (job) => isActive(job) && nowMs - Date.parse(job.createdAt) > JOB_DEADLINE_MS
-  );
+  return jobs.filter((job) => isExpired(job, nowMs));
 }
 
 export interface CleanupResult {
