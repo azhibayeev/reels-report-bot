@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AccountConfig, accountUserId, DARISTEPPE, QURANY_APP } from "../../../lib/accounts";
 import { computeReport } from "../../../lib/diff";
+import { loadStoreClicks } from "../../../lib/applink-store";
 import {
   escapeHtml,
   formatClicksMessage,
   formatCsv,
   formatInfoMessage,
   formatNowMessage,
+  formatStoreClicksMessage,
   formatTargetMessage,
 } from "../../../lib/format";
 import { handleCallback, handleEditReply, liveApproveDeps } from "../../../lib/farm/approve";
@@ -83,6 +85,7 @@ const HELP =
   "/infoapp — общая статистика по всем рилсам (@qurany_app)\n" +
   "/kliki — заходы по ссылкам за спринт (с 12:30)\n" +
   "/klikitotal — заходы по ссылкам за всё время\n" +
+  "/stor — переходы в стор по ссылкам амбассадоров за спринт (с 12:30)\n" +
   "/target — таргет за сутки (реклама + уровни лидов)\n" +
   "/targettotal — таргет за всё время (тотал по всем показателям)\n" +
   "/batch — загрузить пачку роликов фермы (ссылка на 30 минут)\n" +
@@ -135,6 +138,12 @@ async function handleReportCommand(cmd: string, opts: SendOptions): Promise<void
   if (cmd === "/kliki") {
     const since = Math.floor(lastSprintStart().getTime() / 1000);
     await sendMessage(formatClicksMessage(await getClicksStats(since), "Заходы по ссылкам · спринт"), opts);
+    return;
+  }
+  if (cmd === "/stor") {
+    const from = lastSprintStart();
+    const rows = await loadStoreClicks(from, new Date());
+    await sendMessage(formatStoreClicksMessage(rows, "Переходы в стор · спринт", from, new Date()), opts);
     return;
   }
   if (cmd === "/klikitotal") {

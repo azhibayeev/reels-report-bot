@@ -1,3 +1,5 @@
+import { ambassadorLabel } from "./applink";
+import type { StoreClicks } from "./applink-store";
 import type { AdInsights } from "./meta";
 import type { LeadLevels } from "./leads";
 import type { ClicksStats } from "./posthog";
@@ -157,6 +159,46 @@ export function formatClicksMessage(s: ClicksStats, title: string): string {
   if (direct) lines.push(`<b>Прямые:</b> <b>${nf.format(direct)}</b>`);
   if (other) lines.push(`<b>Другое:</b> ${other}`);
   if (!bio && !inf && !direct && !other) lines.push("Пока нет заходов за период.");
+
+  return lines.join("\n");
+}
+
+// Сводка переходов в стор по коротким ссылкам амбассадоров (/go/<слаг>).
+// Метрика — переходы, не уникальные люди: у редиректа нет ни куки, ни person_id,
+// а установки всё равно считают консоли Play и App Store, только сутками позже.
+export function formatStoreClicksMessage(rows: StoreClicks[], title: string, from: Date, to: Date): string {
+  const period = `С ${fmtDateTime(from.toISOString())} по ${fmtDateTime(to.toISOString())} (Джакарта)`;
+  const lines: string[] = [`📲 <b>${escapeHtml(title)}</b>`, period, ""];
+
+  const store = (r: StoreClicks): number => r.android + r.ios;
+  const total = rows.reduce((s, r) => s + store(r), 0);
+  const desktop = rows.reduce((s, r) => s + r.desktop, 0);
+
+  if (total === 0) {
+    lines.push("Пока нет переходов за период.");
+    return lines.join("\n");
+  }
+
+  for (const r of rows) {
+    // Разбивку показываем только по той витрине, куда кто-то дошёл: «App Store 0»
+    // в строке — шум, из-за которого не видно живых цифр.
+    const split = [
+      r.android > 0 ? `Play ${nf.format(r.android)}` : null,
+      r.ios > 0 ? `App Store ${nf.format(r.ios)}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    const tail = split ? ` (${split})` : "";
+    lines.push(`${escapeHtml(ambassadorLabel(r.slug))} — <b>${nf.format(store(r))}</b>${tail}`);
+  }
+
+  lines.push("");
+  lines.push(`Σ ТОТАЛ — <b>${nf.format(total)}</b>`);
+  if (desktop > 0) {
+    lines.push(
+      `<i>Ещё ${nf.format(desktop)} открыли с компьютера — там страница выбора, в стор не считаем.</i>`
+    );
+  }
 
   return lines.join("\n");
 }

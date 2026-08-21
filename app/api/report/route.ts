@@ -2,7 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { AccountConfig, accountUserId, accountsToRun } from "../../../lib/accounts";
 import { buildTrendChart, chartSkipReason, computeDailyViewGains, renderChartPng } from "../../../lib/chart";
 import { computeReport } from "../../../lib/diff";
-import { escapeHtml, formatClicksMessage, formatMessage, formatTargetMessage } from "../../../lib/format";
+import { loadStoreClicks } from "../../../lib/applink-store";
+import {
+  escapeHtml,
+  formatClicksMessage,
+  formatMessage,
+  formatStoreClicksMessage,
+  formatTargetMessage,
+} from "../../../lib/format";
 import { getLeadLevels } from "../../../lib/leads";
 import { getAdInsights } from "../../../lib/meta";
 import { getClicksStats, getDailyClicks, lastSprintStart } from "../../../lib/posthog";
@@ -215,6 +222,17 @@ export async function GET(req: NextRequest) {
         await sendMessage(formatClicksMessage(clicks, "Заходы по ссылкам · за сутки"));
       } catch (e) {
         console.error("clicks report failed:", e);
+      }
+
+      // Переходы в стор по коротким ссылкам амбассадоров — то же окно (12:30 → 12:30),
+      // чтобы цифры соседних сообщений относились к одним суткам. Изолировано:
+      // ошибка Blob не должна отменять уже отправленные отчёты.
+      try {
+        const from = lastSprintStart(new Date(now.getTime() - 3600_000));
+        const rows = await loadStoreClicks(from, now);
+        await sendMessage(formatStoreClicksMessage(rows, "Переходы в стор · за сутки", from, now));
+      } catch (e) {
+        console.error("store clicks report failed:", e);
       }
 
       // Сводка по таргету (реклама Meta + разбивка лидов по уровню инвестора) → тема Daily.

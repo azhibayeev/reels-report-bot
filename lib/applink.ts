@@ -13,6 +13,27 @@ export const APPSTORE_ID = "6760942823";
 /** Кампания одна на всех амбассадоров; людей различает utm_source / ct. */
 export const CAMPAIGN = "ambassador";
 
+export interface Ambassador {
+  /** Хвост короткой ссылки: /go/<slug>. */
+  slug: string;
+  /** Подпись в отчёте. */
+  label: string;
+}
+
+// Кому раздали ссылки. Список нужен ровно для одного: чтобы человек с нулём
+// переходов всё равно попал в отчёт строкой «0», а не исчез из него вместе со
+// своим результатом. Слаги, которых тут нет, отчёт подхватит из Blob сам.
+export const AMBASSADORS: Ambassador[] = [
+  { slug: "bara", label: "Бара" },
+  { slug: "zahid", label: "Захид" },
+  { slug: "daristeppe", label: "@daristeppe" },
+  { slug: "quranyapp", label: "@qurany_app" },
+];
+
+export function ambassadorLabel(slug: string): string {
+  return AMBASSADORS.find((a) => a.slug === slug)?.label ?? slug;
+}
+
 export function detectPlatform(userAgent: string | null | undefined): Platform {
   const ua = (userAgent ?? "").toLowerCase();
   // Порядок важен: встроенный браузер Instagram на iOS содержит и «mobile», и свою
