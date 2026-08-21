@@ -18,9 +18,13 @@ import {
   parseRhythm,
   parseStylePosition,
   positionName,
+  rateBlockedItems,
   retryableItems,
 } from "../../../lib/farm/commands";
 import { listItems, saveItem } from "../../../lib/farm/store";
+import { loadCooldown } from "../../../lib/farm/cooldown";
+import { nextFreeSlot, slotConfigFromEnv } from "../../../lib/farm/slots";
+import { queueRendered } from "../../../lib/farm/queue";
 import {
   loadDefaultPosition,
   loadRhythm,
@@ -211,7 +215,7 @@ async function handleFarmCommand(cmd: string, text: string, opts: SendOptions, r
       ? process.env.FARM_BASE_URL.replace(/\/+$/, "")
       : `https://${req.headers.get("x-forwarded-host") ?? req.nextUrl.host}`;
     await sendMessage(
-      `${formatQueue(items, Date.now())}\n\n🗓 Что и когда запланировано:\n${base}/farm/plan/${planToken}`,
+      `${formatQueue(items, Date.now(), await loadCooldown())}\n\n🗓 Что и когда запланировано:\n${base}/farm/plan/${planToken}`,
       opts
     );
     for (const batchId of batchesToKick(items, Date.now())) {
@@ -295,9 +299,39 @@ async function handleFarmCommand(cmd: string, text: string, opts: SendOptions, r
   }
   if (cmd === "/retry") {
     const items = await listItems();
+    // Сначала те, кого убил блок по частоте: у них видео цело и до публикации
+    // дело не дошло — их надо не пересобирать, а вернуть в очередь. Молча
+    // пересобрать их значило бы прогнать ffmpeg по шестидесяти роликам зря.
+    const blocked = rateBlockedItems(items);
+    let requeued = 0;
+    if (blocked.length > 0) {
+      const rhythm = await loadRhythm();
+      const slotCfg = { ...slotConfigFromEnv(), ...(rhythm ? { minutes: rhythm.minutes, perDay: rhythm.perDay } : {}) };
+      const slotDeps = {
+        now: () => Date.now(),
+        listItems,
+        saveItem,
+        nextFreeSlot: (taken: string[], nowMs: number) => nextFreeSlot(taken, nowMs, slotCfg),
+      };
+      for (const item of blocked) {
+        try {
+          await queueRendered({ ...item, error: null, postingAt: null }, slotDeps);
+          requeued += 1;
+        } catch (error) {
+          console.error("farm retry requeue failed", item.itemId, error);
+        }
+      }
+    }
+
     const broken = retryableItems(items);
     if (broken.length === 0) {
-      await sendMessage("Пересобирать нечего: сбойных роликов с целой подложкой нет.", opts);
+      await sendMessage(
+        requeued > 0
+          ? `Вернул в очередь: ${requeued} — их зарубил лимит частоты Instagram, пересборка им не нужна. ` +
+              `Времена выдал свободные, расписание в /reels.`
+          : "Пересобирать нечего: сбойных роликов с целой подложкой нет.",
+        opts
+      );
       return true;
     }
 
@@ -325,7 +359,8 @@ async function handleFarmCommand(cmd: string, text: string, opts: SendOptions, r
 
     const rest = broken.length - restored;
     await sendMessage(
-      `Вернул в сборку: ${restored}. Сбойных осталось: ${rest}.` +
+      (requeued > 0 ? `Вернул в очередь без пересборки: ${requeued} (лимит частоты Instagram).\n` : "") +
+        `Вернул в сборку: ${restored}. Сбойных осталось: ${rest}.` +
         (rest > 0 ? `\nЕсли эти соберутся — /retry ${rest} доберёт остальные.` : ""),
       opts
     );

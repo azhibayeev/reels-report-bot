@@ -211,6 +211,8 @@ function postDeps(over: Partial<PostTickDeps> = {}): PostTickDeps {
     loadItem,
     saveItem,
     listItems,
+    loadCooldown: async () => null,
+    saveCooldown: async () => {},
     // Настоящая запись в журнал, а не заглушка: сквозной тест обязан ловить
     // разрыв между публикацией и журналом — ради него журнал и существует.
     recordPublication,

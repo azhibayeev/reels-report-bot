@@ -1,5 +1,7 @@
 import { escapeHtml } from "../format";
 import { isAbandoned } from "./tick";
+import { Cooldown, formatCooldown, isPaused } from "./cooldown";
+import { isRateBlock } from "./post";
 import { HookPosition, Item } from "./types";
 
 // Ролики фермы, которых команда должна коснуться заново: свежий /batch мог
@@ -81,6 +83,21 @@ export function retryableItems(items: Item[]): Item[] {
     .sort((a, b) => a.index - b.index);
 }
 
+/**
+ * Ролики, убитые блоком по частоте действий: собранное видео цело, а до самой
+ * публикации дело не дошло — Instagram отказал раньше. Дубля в ленте тут быть
+ * не может, поэтому их, в отличие от прочих упавших на заливке, можно просто
+ * вернуть в очередь, не пересобирая.
+ *
+ * Ветка нужна для роликов, потерянных ДО появления паузы (21.08.2026, шесть
+ * штук): дальше такие в failed уже не уходят — их придерживает cooldown.
+ */
+export function rateBlockedItems(items: Item[]): Item[] {
+  return items
+    .filter((i) => i.status === "failed" && Boolean(i.videoUrl) && isRateBlock(i.error ?? ""))
+    .sort((a, b) => a.index - b.index);
+}
+
 /** «/retry 5» — сколько роликов вернуть в работу. Без числа — три: после починки
  * инфраструктуры дешевле проверить на трёх, чем снова получить лавину. */
 export function parseRetryCount(text: string): number {
@@ -146,7 +163,7 @@ function truncateError(error: string): string {
   return `${error.slice(0, MAX_ERROR_CHARS)}…`;
 }
 
-export function formatQueue(items: Item[], nowMs: number): string {
+export function formatQueue(items: Item[], nowMs: number, cooldown: Cooldown | null = null): string {
   if (items.length === 0) return "Ферма пуста: ни одного ролика ещё не загружено.";
 
   const review = items.filter((i) => i.status === "review");
@@ -164,6 +181,11 @@ export function formatQueue(items: Item[], nowMs: number): string {
   const failedPosting = items.filter((i) => i.status === "failed" && i.videoUrl !== null);
 
   const lines: string[] = ["🎬 <b>Ферма</b>"];
+  // Паузу показываем первой строкой: без неё «в очереди: 40, ближайший слот
+  // 12:31» читается как «всё идёт», хотя не идёт ничего.
+  if (isPaused(cooldown, nowMs)) {
+    lines.push(`⏸ Заливка на паузе — Instagram ограничил частоту. Ждём ${formatCooldown(cooldown!, nowMs)}.`);
+  }
   lines.push(`ждут апрува: ${review.length}`);
   lines.push(`в очереди: ${queued.length}`);
   if (rendering.length > 0) lines.push(`собирается сейчас: ${rendering.length}`);

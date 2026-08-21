@@ -71,6 +71,8 @@ describe("A. два тика заливки на один ролик", () => {
       deleteBlobQuiet: async () => {},
       notify: async () => {},
       recordPublication: async () => {},
+      loadCooldown: async () => null,
+      saveCooldown: async () => {},
     });
 
     // Внешний таймер /api/farm/post и добор из суточного крона стартуют независимо:
@@ -222,6 +224,8 @@ describe("F. Graph API отвечает 429 при создании контей
       deleteBlobQuiet: async () => {},
       notify: async () => {},
       recordPublication: async () => {},
+      loadCooldown: async () => null,
+      saveCooldown: async () => {},
     };
 
     await postOne({ ...baseItem }, deps);

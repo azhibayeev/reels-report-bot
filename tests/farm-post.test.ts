@@ -46,6 +46,8 @@ function makeDeps(overrides: Partial<PostDeps> = {}): PostDeps {
     deleteBlobQuiet: vi.fn(async () => {}),
     notify: vi.fn(async () => {}),
     recordPublication: vi.fn(async () => {}),
+    loadCooldown: vi.fn(async () => null),
+    saveCooldown: vi.fn(async () => {}),
     ...overrides,
   };
 }

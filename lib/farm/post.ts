@@ -4,6 +4,9 @@ import { escapeHtml } from "../format";
 import { sendMessage } from "../telegram";
 import { requireEnv } from "./tick";
 import { resolveFarmToken } from "./token-store";
+import { Cooldown, formatCooldown, isPaused, loadCooldown, nextCooldown, saveCooldown } from "./cooldown";
+import { loadRhythm } from "./style";
+import { slotConfigFromEnv } from "./slots";
 import { PublicationRecord, recordPublication, toRecord } from "./journal";
 import { Item } from "./types";
 
@@ -27,10 +30,18 @@ export interface PostDeps {
    * postOne обязан оставаться тестируемым без сети, а журнал ходит в Blob.
    */
   recordPublication: (rec: PublicationRecord) => Promise<void>;
+  /** Пауза заливки, объявленная Instagram — см. lib/farm/cooldown.ts. */
+  loadCooldown: () => Promise<Cooldown | null>;
+  saveCooldown: (cooldown: Cooldown) => Promise<void>;
 }
 
 export interface PostTickDeps extends PostDeps {
   listItems: () => Promise<Item[]>;
+  /**
+   * Минимум времени между двумя публикациями. В обычном ритме не срабатывает
+   * никогда: слоты и так разнесены. Смысл — в доборе просрочки, см. runPostTick.
+   */
+  minGapMs?: number;
 }
 
 export function pickDue(items: Item[], nowMs: number): Item | null {
@@ -91,6 +102,40 @@ const AUTH_ERROR_PATTERNS: RegExp[] = [
 
 export function isAuthFailure(message: string): boolean {
   return AUTH_ERROR_PATTERNS.some((re) => re.test(message));
+}
+
+/**
+ * Ограничение по частоте действий на самом аккаунте. Третий род отказа, и
+ * обходиться с ним надо иначе, чем с двумя прежними: это не брак ролика (повтор
+ * бесполезен) и не пятиминутная икота Graph (повтор через четверть часа помог
+ * бы). Instagram сказал аккаунту «слишком часто» и держит это часами.
+ *
+ * Цену узнали на проде 21.08.2026: HTTP 400 «User is performing too many
+ * actions» не подходил ни под один шаблон ниже — ни 429, ни «rate limit», ни
+ * «too many requests», — и ролик уходил в failed по общей ветке. Следующий
+ * приходил в свой слот через сорок пять минут, получал то же самое и умирал
+ * так же. Шесть роликов за три часа, вернуть их нечем.
+ *
+ * Поэтому отдельная ветка: пауза объявляется на всю ферму сразу (см.
+ * lib/farm/cooldown.ts), а ролик остаётся в очереди и попыток не тратит —
+ * он ни в чём не виноват.
+ */
+const RATE_BLOCK_PATTERNS: RegExp[] = [
+  /performing too many actions/i,
+  // Код 9 в отказе Graph — тот же блок; в тексте он приходит и как "(#9)", и
+  // как "code: 9". Оба написания встречаются в ответах v23.0.
+  /\(#9\)/,
+  /\bcode\W{0,3}9\b/i,
+  // Формулировки того же семейства «действие ограничено» из ответов Instagram.
+  /action blocked/i,
+  /temporarily blocked/i,
+  // Общего "please try again later" здесь сознательно нет: Graph отвечает так и
+  // на разовую пятисотку, а цена ошибки несимметрична — лишний час простоя всей
+  // фермы против одного ролика, ушедшего в повтор через пятнадцать минут.
+];
+
+export function isRateBlock(message: string): boolean {
+  return RATE_BLOCK_PATTERNS.some((re) => re.test(message));
 }
 
 function isTransientPublishError(message: string): boolean {
@@ -282,6 +327,51 @@ async function postOneLocked(item: Item, deps: PostDeps): Promise<void> {
       );
       return;
     }
+    if (isRateBlock(message)) {
+      // Блок по частоте действий держится часами и накрывает аккаунт целиком:
+      // следующий ролик получит ровно тот же отказ. Поэтому решение общее —
+      // пауза для всей заливки, а не приговор этому ролику.
+      let previous: Cooldown | null = null;
+      try {
+        previous = await deps.loadCooldown();
+      } catch (cooldownError) {
+        // Непрочитанная пауза значит лишь «серия начинается заново»: хуже было
+        // бы уронить обработку и оставить ролик в posting навсегда.
+        console.error("farm postOne: пауза не прочиталась", fresh.itemId, cooldownError);
+      }
+      // Пауза ещё идёт, а ролик всё равно дошёл до Graph (другой инстанс не
+      // увидел записи в Blob) — шаг не растим и в чат второй раз не пишем.
+      const running = isPaused(previous, deps.now());
+      const cooldown = running ? (previous as Cooldown) : nextCooldown(previous, deps.now(), message);
+      if (!running) {
+        try {
+          await deps.saveCooldown(cooldown);
+        } catch (cooldownError) {
+          // Ролик мы всё равно отодвинем ниже, так что бесконечного долбления
+          // не будет; но остальную очередь без записи ничто не остановит.
+          console.error("farm postOne: пауза не записана, очередь не остановлена", fresh.itemId, cooldownError);
+        }
+      }
+      // Ролик встаёт первым на выход после паузы, а не остаётся в прошлом со
+      // своим просроченным слотом: иначе pickDue вернул бы его в ту же секунду,
+      // когда пауза кончится, вперемешку с другими просроченными.
+      const resumeAt = Date.parse(cooldown.until);
+      const scheduledAt = Number.isFinite(resumeAt)
+        ? new Date(resumeAt).toISOString()
+        : fresh.scheduledAt;
+      console.error("farm postOne: Instagram ограничил частоту, заливка на паузе", fresh.itemId, cooldown.until, message);
+      // Попытку не тратим: ролик ни в чём не виноват, виновата частота.
+      await deps.saveItem({ ...fresh, status: "queued", postingAt: null, error: message, scheduledAt });
+      if (!running) {
+        await notifyQuiet(
+          `Instagram ограничил частоту публикаций: «${message}»\n\n` +
+            `Заливка встала на ${formatCooldown(cooldown, deps.now())}. ` +
+            `Ролики не потеряны — они ждут в очереди и пойдут сами, когда пауза кончится. ` +
+            `Проверить очередь: /reels`
+        );
+      }
+      return;
+    }
     if (isTransientPublishError(message)) {
       // Временный отказ ДО публикации (429/5xx/сеть) — ролик уже одобрен
       // человеком, терять слот из-за пятиминутного лимита Graph нельзя, но и
@@ -314,15 +404,72 @@ async function postOneLocked(item: Item, deps: PostDeps): Promise<void> {
   }
 }
 
+/**
+ * Момент последней заливки: и завершённой, и той, что прямо сейчас в работе.
+ * Заливка «в работе» считается наравне с завершённой сознательно — иначе два
+ * инстанса, стартовав в одну минуту, разогнали бы темп вдвое именно тогда,
+ * когда его надо сбавить. Брошенный posting перестанет мешать сам, как только
+ * выйдет за окно паузы между публикациями.
+ */
+export function lastPostedAt(items: Item[]): number | null {
+  let last: number | null = null;
+  for (const item of items) {
+    for (const stamp of [item.postedAt, item.postingAt]) {
+      if (!stamp) continue;
+      const at = Date.parse(stamp);
+      if (Number.isFinite(at) && (last === null || at > last)) last = at;
+    }
+  }
+  return last;
+}
+
 export async function runPostTick(deps: PostTickDeps, maxItems = 1): Promise<number> {
+  // Пауза после блока по частоте — первое, что проверяем: ходить в Graph, зная,
+  // что он откажет, значит продлевать блок, Instagram считает и отказы тоже.
+  let cooldown: Cooldown | null = null;
+  try {
+    cooldown = await deps.loadCooldown();
+  } catch (error) {
+    console.error("farm postTick: пауза не прочиталась, работаем как обычно", error);
+  }
+  if (isPaused(cooldown, deps.now())) {
+    console.error("farm postTick: заливка на паузе до", (cooldown as Cooldown).until);
+    return 0;
+  }
+
   let taken = 0;
+  // Заливка, случившаяся в этом же проходе: запись в Blob читается не мгновенно,
+  // и без собственной памяти второй виток цикла не увидел бы первого.
+  let postedHere: number | null = null;
   while (taken < maxItems) {
-    const item = pickDue(await deps.listItems(), deps.now());
+    const items = await deps.listItems();
+    const gap = deps.minGapMs ?? 0;
+    if (gap > 0) {
+      const fromBlob = lastPostedAt(items);
+      const last = postedHere !== null && (fromBlob === null || postedHere > fromBlob) ? postedHere : fromBlob;
+      // Разгон после паузы — это то, обо что ферма и споткнулась: просроченных
+      // роликов накапливается несколько, внешний таймер дёргает заливку каждые
+      // пятнадцать минут, и очередь пошла бы втрое быстрее задуманного ритма
+      // сразу после того, как аккаунт наказали именно за частоту.
+      if (last !== null && deps.now() - last < gap) break;
+    }
+    const item = pickDue(items, deps.now());
     if (!item) break;
     await postOne(item, deps);
+    postedHere = deps.now();
     taken += 1;
   }
   return taken;
+}
+
+// Потолок паузы между публикациями. Половина ритма, но не больше получаса:
+// брать сам ритм нельзя — заливка занимает минуты, и следующий слот оказывался
+// бы «слишком рано» каждый раз, отставание копилось бы и уводило расписание.
+export const MAX_PUBLISH_GAP_MS = 25 * 60_000;
+
+export function publishGapMs(rhythmMinutes: number): number {
+  if (!Number.isFinite(rhythmMinutes) || rhythmMinutes <= 0) return 0;
+  return Math.min(Math.round((rhythmMinutes * 60_000) / 2), MAX_PUBLISH_GAP_MS);
 }
 
 // Асинхронна, потому что ключ теперь не из переменной окружения, а из
@@ -331,7 +478,13 @@ export async function livePostTickDeps(): Promise<PostTickDeps> {
   const token = await resolveFarmToken();
   const igUserId = requireEnv("FARM_IG_ID");
   const publishDeps = { token, igUserId };
+  // Ритм из состояния, как и везде: команда /rhythm переживает деплой, а
+  // переменные окружения — только начальное значение.
+  const rhythm = await loadRhythm();
   return {
+    minGapMs: publishGapMs(rhythm?.minutes ?? slotConfigFromEnv().minutes),
+    loadCooldown,
+    saveCooldown,
     now: () => Date.now(),
     loadItem,
     saveItem,
