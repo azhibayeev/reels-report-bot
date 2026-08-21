@@ -35,6 +35,21 @@ export interface RenderDeps {
   fontFamily: string;
 }
 
+// Сохраняет задачу со статусом "failed" и возвращает её вызывающему коду —
+// не бросая, даже если само сохранение отказа тоже не удалось (тот же
+// приём, что fail() в lib/pipeline.ts: конвейер запускается фоново из
+// after(), и уронить его здесь означает не только потерять запись в Blob,
+// но и не дать роуту отправить пользователю сообщение об ошибке).
+async function fail(deps: RenderDeps, job: Job, error: string): Promise<Job> {
+  const out: Job = { ...job, status: "failed", error };
+  try {
+    await deps.save(out);
+  } catch (saveError) {
+    console.error("deliver: не удалось сохранить статус failed", job.jobId, saveError);
+  }
+  return out;
+}
+
 // Ведёт утверждённую задачу от "awaiting" до "done" (или "failed"):
 // собирает .ass, вшивает субтитры через ffmpeg, заливает результат и
 // доставляет его в чат подходящей веткой. Зависимости идут параметром —
@@ -52,37 +67,48 @@ export async function runRender(deps: RenderDeps, job: Job): Promise<Job> {
   const blocking = blockingWarnings(job.cues);
   if (blocking.length > 0) return job;
 
-  const rendering: Job = { ...job, status: "rendering" };
-  await deps.save(rendering);
-
+  // current — последнее успешно собранное (не обязательно успешно
+  // сохранённое) состояние задачи. Переход в "rendering" — ПЕРВОЕ
+  // сохранение — нарочно внутри общего try/catch, а не перед ним: сбой
+  // записи здесь (Blob моргнул ровно на /ok) раньше вылетал из runRender
+  // необработанным исключением, роут в after() ловил его только в
+  // console.error и не отправлял в чат ничего — пользователь получал 202 и
+  // тишину до суточного дедлайна "awaiting".
+  let current: Job = job;
   try {
-    const src = await deps.download(job.sourceUrl);
-    const ass = buildAss(job.cues, deps.fontFamily);
+    current = { ...current, status: "rendering" };
+    await deps.save(current);
+
+    const src = await deps.download(current.sourceUrl);
+    const ass = buildAss(current.cues, deps.fontFamily);
     const outPath = await deps.render(src, ass, deps.fontFamily);
     const size = await deps.size(outPath);
-    const url = await deps.upload(outPath, job.jobId);
+    const url = await deps.upload(outPath, current.jobId);
 
-    const delivering: Job = {
-      ...rendering,
+    current = {
+      ...current,
       status: "delivering",
       deliveringAt: new Date().toISOString(),
       resultUrl: url,
     };
-    await deps.save(delivering);
+    await deps.save(current);
 
-    await deps.deliver(delivering, url, pickDelivery(size));
+    await deps.deliver(current, url, pickDelivery(size));
 
-    const done: Job = { ...delivering, status: "done", deliveringAt: null };
-    await deps.save(done);
-    return done;
+    current = { ...current, status: "done", deliveringAt: null };
+    await deps.save(current);
+    return current;
   } catch (e) {
-    const failed: Job = {
-      ...rendering,
-      status: "failed",
-      error: e instanceof Error ? e.message : String(e),
-    };
-    await deps.save(failed);
-    return failed;
+    const message = e instanceof Error ? e.message : String(e);
+    // Результат уже залит (resultUrl проставлен), а упало что-то после —
+    // скорее всего сама доставка в Telegram. Заставлять пользователя гонять
+    // минуту рендера заново из-за чисто сетевого сбоя отправки не за чем:
+    // ссылка на готовый файл идёт в текст ошибки с тем же сроком жизни, что
+    // уже обещан ветке "больше 50 МБ" (сутки, до плановой уборки).
+    const withHint = current.resultUrl
+      ? `${message}\n\nРолик уже готов, забери по ссылке (живёт сутки): ${current.resultUrl}`
+      : message;
+    return await fail(deps, current, withHint);
   } finally {
     // /tmp на функции — 500 МБ на всё. Каталог убирается на любом исходе, а
     // не только на успехе.

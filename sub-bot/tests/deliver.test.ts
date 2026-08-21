@@ -80,4 +80,31 @@ describe("runRender", () => {
     expect(d.render).not.toHaveBeenCalled();
     expect(out.status).toBe("done");
   });
+
+  // Фикс-раунд 1, находка 1: первое сохранение (переход в "rendering") жило
+  // вне try/catch — отказ Blob ровно на /ok вылетал из runRender
+  // необработанным исключением, роут в after() ловил его только в
+  // console.error и в чат не уходило ничего вообще.
+  it("если сохранение статуса rendering падает — не бросает, возвращает задачу с ошибкой", async () => {
+    const d = deps({ save: vi.fn().mockRejectedValue(new Error("blob unavailable")) });
+    const out = await runRender(d as never, job());
+    expect(out.status).toBe("failed");
+    expect(out.error).toMatch(/blob unavailable/);
+    expect(d.download).not.toHaveBeenCalled();
+    expect(d.cleanup).toHaveBeenCalled();
+  });
+
+  // Фикс-раунд 1, находка 2: доставка в Telegram падает уже ПОСЛЕ успешной
+  // заливки в Blob (resultUrl проставлен) — без ссылки в тексте ошибки
+  // пользователю пришлось бы гонять минуту рендера заново из-за чисто
+  // сетевого сбоя отправки.
+  it("если доставка падает после заливки результата — в ошибке остаётся ссылка на готовый файл", async () => {
+    const d = deps({ deliver: vi.fn().mockRejectedValue(new Error("Telegram sendVideo failed (502)")) });
+    const out = await runRender(d as never, job());
+    expect(out.status).toBe("failed");
+    expect(out.resultUrl).toBe("https://blob/out.mp4");
+    expect(out.error).toMatch(/Telegram sendVideo failed/);
+    expect(out.error).toContain("https://blob/out.mp4");
+    expect(out.error).toMatch(/сутки/);
+  });
 });
