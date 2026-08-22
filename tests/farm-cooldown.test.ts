@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { COOLDOWN_STEPS_MS, isPaused, nextCooldown, STRIKE_RESET_MS } from "../lib/farm/cooldown";
+import { COOLDOWN_STEPS_MS, formatCooldown, isPaused, nextCooldown, STRIKE_RESET_MS } from "../lib/farm/cooldown";
 import { isRateBlock, lastPostedAt, postOne, publishGapMs, runPostTick, PostDeps, PostTickDeps } from "../lib/farm/post";
 import { rateBlockedItems } from "../lib/farm/commands";
 import { Item } from "../lib/farm/types";
@@ -114,13 +114,18 @@ describe("postOne на блоке по частоте", () => {
     expect(last.postAttempts).toBe(2);
   });
 
-  it("встаёт на выход сразу после паузы, а не остаётся с просроченным слотом", async () => {
+  it("место в очереди сохраняет: он стоял первым и первым же выйдет после паузы", async () => {
+    // Раньше слот сдвигали ровно на конец паузы — и ролик оказывался позади
+    // всех, кто просрочился за эти часы: pickDue берёт самый ранний слот, а
+    // конец паузы позже любого из них. Стоять он не мешает: пока пауза идёт,
+    // runPostTick в Instagram не ходит вовсе, а на сетку очередь возвращает
+    // будильник (rescheduleAfterPause), и там прежний порядок как раз и решает.
     const saveItem = vi.fn(async (_item: Item) => {});
     const saveCooldown = vi.fn(async () => {});
     await postOne(base, makeDeps({ saveItem, saveCooldown }));
 
     const last = saveItem.mock.calls.map((c) => c[0] as Item).at(-1)!;
-    expect(Date.parse(last.scheduledAt!)).toBe(NOW + COOLDOWN_STEPS_MS[0]);
+    expect(last.scheduledAt).toBe(base.scheduledAt);
   });
 
   it("объявляет паузу всей заливке", async () => {
@@ -304,5 +309,46 @@ describe("rateBlockedItems", () => {
 
   it("не трогает прочих упавших на заливке: там повтор рискует дублем в ленте", () => {
     expect(rateBlockedItems([{ ...killed, error: "IG отбраковал ролик (ERROR): битый файл" }])).toEqual([]);
+  });
+});
+
+describe("formatCooldown", () => {
+  // Дословно с прода 21–22.08.2026: «Заливка встала на 3 ч 60 мин (до 00:16)»
+  // и «на 7 ч 60 мин (до 09:15)». Пауза объявляется одним вызовом часов, а
+  // печатается другим, и до круглого часа не хватает долей секунды — минуты
+  // округлялись до шестидесяти, а часы уже были отброшены вниз.
+  it("шестидесяти минут не бывает: неполный час — это следующий час", () => {
+    const until = new Date(NOW + 4 * 3_600_000).toISOString();
+    const cooldown = { until, since: new Date(NOW).toISOString(), strikes: 3, reason: BLOCK };
+
+    expect(formatCooldown(cooldown, NOW + 300)).toMatch(/^4 ч \(до /);
+  });
+
+  it("круглый час печатает без «0 мин»", () => {
+    const until = new Date(NOW + 2 * 3_600_000).toISOString();
+    const cooldown = { until, since: new Date(NOW).toISOString(), strikes: 2, reason: BLOCK };
+
+    expect(formatCooldown(cooldown, NOW)).toMatch(/^2 ч \(до /);
+  });
+
+  it("час, до которого не хватает секунд, остаётся часом, а не «60 мин»", () => {
+    const until = new Date(NOW + 3_600_000).toISOString();
+    const cooldown = { until, since: new Date(NOW).toISOString(), strikes: 1, reason: BLOCK };
+
+    expect(formatCooldown(cooldown, NOW + 100)).toMatch(/^1 ч \(до /);
+  });
+
+  it("часы и минуты вместе, когда они есть", () => {
+    const until = new Date(NOW + 3_600_000 + 25 * 60_000).toISOString();
+    const cooldown = { until, since: new Date(NOW).toISOString(), strikes: 1, reason: BLOCK };
+
+    expect(formatCooldown(cooldown, NOW)).toMatch(/^1 ч 25 мин \(до /);
+  });
+
+  it("меньше часа — только минуты, и остаток секунд идёт в плюс, а не в ноль", () => {
+    const until = new Date(NOW + 20_000).toISOString();
+    const cooldown = { until, since: new Date(NOW).toISOString(), strikes: 1, reason: BLOCK };
+
+    expect(formatCooldown(cooldown, NOW)).toMatch(/^1 мин \(до /);
   });
 });

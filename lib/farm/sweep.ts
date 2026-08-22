@@ -1,5 +1,6 @@
 import { batchesToKick } from "./commands";
-import { normalizeSchedule } from "./schedule";
+import { Cooldown, isPaused } from "./cooldown";
+import { normalizeSchedule, rescheduleAfterPause, SlotChange } from "./schedule";
 import { Item } from "./types";
 
 /**
@@ -21,12 +22,18 @@ export interface SweepDeps {
   triggerRender: (batchId: string) => Promise<void>;
   saveItem: (item: Item) => Promise<void>;
   nextFreeSlot: (taken: string[], nowMs: number) => string;
+  /**
+   * Пауза, объявленная Instagram (см. lib/farm/cooldown.ts). Будильнику она
+   * нужна не чтобы стоять — он ничего не публикует, — а чтобы вовремя убрать
+   * просрочку, которую пауза копит: см. rescheduleAfterPause.
+   */
+  loadCooldown: () => Promise<Cooldown | null>;
 }
 
 export interface SweepResult {
   kicked: string[];
   failed: { batchId: string; error: string }[];
-  /** Сколько роликов пришлось расселить из совпавших слотов. */
+  /** Сколько роликов пришлось передвинуть: из совпавших слотов и из-под паузы. */
   respaced: number;
 }
 
@@ -36,11 +43,41 @@ export async function runSweep(deps: SweepDeps): Promise<SweepResult> {
   const items = await deps.listItems();
   const batches = batchesToKick(items, deps.now());
 
+  // Пауза Instagram копит просрочку: слоты наступают, а публиковать нельзя.
+  // К концу восьмичасовой паузы просроченных набирается полтора десятка, и
+  // заливка выгребает их подряд — мимо дневного окна и мимо лимита роликов в
+  // сутки. Поэтому переносим их на сетку от момента выхода из паузы.
+  let cooldown: Cooldown | null = null;
+  try {
+    cooldown = await deps.loadCooldown();
+  } catch (error) {
+    // Нечитаемая пауза — не повод срывать будильник: расселение и пинки сборки
+    // от неё не зависят, а перенос попробуем на следующем проходе.
+    console.error("farm sweep: пауза не прочиталась, расписание не переносим", error);
+  }
+  const changes: SlotChange[] = [];
+  let scheduled = items;
+  if (isPaused(cooldown, deps.now())) {
+    const moved = rescheduleAfterPause(items, Date.parse((cooldown as Cooldown).until), deps.nextFreeSlot);
+    if (moved.length) {
+      changes.push(...moved);
+      // Дальше расселение должно видеть уже новые времена, иначе оно приняло бы
+      // освободившиеся слоты за занятые и погнало бы ролики по сетке впустую.
+      const byId = new Map(moved.map((c) => [c.itemId, c.scheduledAt]));
+      scheduled = items.map((i) => (byId.has(i.itemId) ? { ...i, scheduledAt: byId.get(i.itemId)! } : i));
+    }
+  }
+
   // Расселяем слипшиеся слоты. Замок при выдаче работает внутри процесса, а
   // ролики рендерятся на разных инстансах одновременно — гонку между ними
   // закрывает только вот такой регулярный проход (см. lib/farm/schedule.ts).
+  changes.push(...normalizeSchedule(scheduled, deps.now(), deps.nextFreeSlot));
+
   let respaced = 0;
-  for (const change of normalizeSchedule(items, deps.now(), deps.nextFreeSlot)) {
+  // По одной записи на ролик: перенос и расселение в одном проходе пересечься
+  // не могут, но лишний put в Blob на пустом месте здесь не нужен и подавно.
+  const lastPerItem = new Map(changes.map((c) => [c.itemId, c]));
+  for (const change of lastPerItem.values()) {
     const item = items.find((i) => i.itemId === change.itemId);
     if (!item) continue;
     try {

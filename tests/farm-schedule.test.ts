@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeSchedule } from "../lib/farm/schedule";
+import { normalizeSchedule, rescheduleAfterPause } from "../lib/farm/schedule";
 import { Item } from "../lib/farm/types";
 
 const base: Item = {
@@ -86,5 +86,65 @@ describe("normalizeSchedule", () => {
   it("ролик без времени не трогаем: он не в расписании", () => {
     const items = [q(1, grid[0]), { ...base, itemId: "x", status: "pending" as const, scheduledAt: null }];
     expect(normalizeSchedule(items, NOW, nextFreeSlot)).toEqual([]);
+  });
+});
+
+// Сетка «после паузы»: те же 45 минут, но с 20:00 — так, чтобы просроченные
+// ролики не могли занять слот раньше момента выхода из паузы.
+const RESUME = Date.parse("2026-08-20T20:00:00.000Z");
+const lateGrid = Array.from({ length: 40 }, (_, i) => new Date(RESUME + i * 45 * 60_000).toISOString());
+const nextFreeAfterResume = (taken: string[]) => lateGrid.find((s) => !taken.includes(s))!;
+
+describe("rescheduleAfterPause", () => {
+  it("просроченные за паузу ролики уходят на сетку, а не вываливаются разом", () => {
+    // Ровно то, что вышло на проде 22.08.2026: пауза на восемь часов, за неё
+    // просрочилось полтора десятка слотов, и после паузы очередь пошла подряд
+    // — в том числе ночью, мимо дневного окна и мимо лимита роликов в сутки.
+    const items = [q(1, grid[0]), q(2, grid[1]), q(3, grid[2])];
+
+    const changes = rescheduleAfterPause(items, RESUME, nextFreeAfterResume);
+
+    expect(changes.map((c) => c.scheduledAt)).toEqual([lateGrid[0], lateGrid[1], lateGrid[2]]);
+  });
+
+  it("первым идёт тот, кто стоял первым: блок его задержал, а не отправил в конец", () => {
+    // Раньше ролик, поймавший блок, отодвигался ровно на конец паузы — и
+    // оказывался позади всех, кто просрочился следом: pickDue берёт самый
+    // ранний слот, а конец паузы позже любого из них.
+    const items = [q(7, grid[3]), q(4, grid[0]), q(5, grid[1])];
+
+    const changes = rescheduleAfterPause(items, RESUME, nextFreeAfterResume);
+    const first = changes.find((c) => c.scheduledAt === lateGrid[0])!;
+
+    expect(first.itemId).toBe("i4");
+  });
+
+  it("повторный проход ничего не двигает: пауза длинная, а будильник частый", () => {
+    const items = [q(1, grid[0]), q(2, grid[1])];
+    for (const c of rescheduleAfterPause(items, RESUME, nextFreeAfterResume)) {
+      items.find((i) => i.itemId === c.itemId)!.scheduledAt = c.scheduledAt;
+    }
+
+    expect(rescheduleAfterPause(items, RESUME, nextFreeAfterResume)).toEqual([]);
+  });
+
+  it("тех, чей слот и так после паузы, не трогает — их время не прошло", () => {
+    const items = [q(1, lateGrid[5])];
+    expect(rescheduleAfterPause(items, RESUME, nextFreeAfterResume)).toEqual([]);
+  });
+
+  it("занятое время второй раз не выдаёт", () => {
+    // posted/posting держат свои слоты: они уже сработали, и наложить на них
+    // просроченный ролик значило бы вернуть ту же слипшуюся сетку.
+    const items = [q(1, grid[0]), q(2, lateGrid[0], { status: "posted" })];
+
+    const changes = rescheduleAfterPause(items, RESUME, nextFreeAfterResume);
+
+    expect(changes).toEqual([{ itemId: "i1", scheduledAt: lateGrid[1] }]);
+  });
+
+  it("упавших и выкинутых в расписание не возвращает", () => {
+    const items = [q(1, grid[0], { status: "failed" }), q(2, grid[1], { status: "rejected" })];
+    expect(rescheduleAfterPause(items, RESUME, nextFreeAfterResume)).toEqual([]);
   });
 });

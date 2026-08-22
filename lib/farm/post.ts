@@ -352,16 +352,16 @@ async function postOneLocked(item: Item, deps: PostDeps): Promise<void> {
           console.error("farm postOne: пауза не записана, очередь не остановлена", fresh.itemId, cooldownError);
         }
       }
-      // Ролик встаёт первым на выход после паузы, а не остаётся в прошлом со
-      // своим просроченным слотом: иначе pickDue вернул бы его в ту же секунду,
-      // когда пауза кончится, вперемешку с другими просроченными.
-      const resumeAt = Date.parse(cooldown.until);
-      const scheduledAt = Number.isFinite(resumeAt)
-        ? new Date(resumeAt).toISOString()
-        : fresh.scheduledAt;
+      // Слот ролика не трогаем. Прежде его двигали ровно на конец паузы, и это
+      // давало обратное задуманному: pickDue берёт самый ранний слот, а конец
+      // паузы позже любого из тех, что просрочатся за эти часы, — ролик,
+      // поймавший блок первым, выходил из паузы последним. Стоять в прошлом ему
+      // ничто не мешает: пока пауза идёт, runPostTick в Instagram не ходит
+      // вовсе, а на сетку очередь возвращает будильник (rescheduleAfterPause в
+      // lib/farm/schedule.ts) — и там прежний порядок как раз и решает.
       console.error("farm postOne: Instagram ограничил частоту, заливка на паузе", fresh.itemId, cooldown.until, message);
       // Попытку не тратим: ролик ни в чём не виноват, виновата частота.
-      await deps.saveItem({ ...fresh, status: "queued", postingAt: null, error: message, scheduledAt });
+      await deps.saveItem({ ...fresh, status: "queued", postingAt: null, error: message });
       if (!running) {
         await notifyQuiet(
           `Instagram ограничил частоту публикаций: «${message}»\n\n` +

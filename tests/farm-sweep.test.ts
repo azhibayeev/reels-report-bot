@@ -21,6 +21,7 @@ describe("runSweep", () => {
     const saved: Item[] = [];
     const result = await runSweep({
       now: () => NOW,
+      loadCooldown: async () => null,
       listItems: async () => [
         item({ itemId: "a", index: 1, status: "queued", scheduledAt: "2026-08-21T02:00:00.000Z" }),
         item({ itemId: "b", index: 2, status: "queued", scheduledAt: "2026-08-21T02:00:00.000Z" }),
@@ -42,6 +43,7 @@ describe("runSweep", () => {
     const triggerRender = vi.fn(async (_batchId: string) => {});
     const result = await runSweep({
       now: () => NOW,
+      loadCooldown: async () => null,
       listItems: async () => [
         item({ itemId: "a", batchId: "b1", status: "pending" }),
         item({ itemId: "b", batchId: "b1", status: "pending" }),
@@ -61,6 +63,7 @@ describe("runSweep", () => {
     const triggerRender = vi.fn(async () => {});
     const result = await runSweep({
       now: () => NOW,
+      loadCooldown: async () => null,
       listItems: async () => [item({ status: "review" }), item({ itemId: "z", status: "posted" })],
       saveItem: async () => {},
       nextFreeSlot: () => "2026-08-21T02:00:00.000Z",
@@ -75,6 +78,7 @@ describe("runSweep", () => {
     const triggerRender = vi.fn(async () => {});
     await runSweep({
       now: () => NOW,
+      loadCooldown: async () => null,
       listItems: async () => [
         item({ status: "rendering", renderingAt: new Date(NOW - 30_000).toISOString() }),
       ],
@@ -90,6 +94,7 @@ describe("runSweep", () => {
     const triggerRender = vi.fn(async () => {});
     await runSweep({
       now: () => NOW,
+      loadCooldown: async () => null,
       listItems: async () => [
         item({ status: "rendering", renderingAt: new Date(NOW - 10 * 60_000).toISOString() }),
       ],
@@ -109,6 +114,7 @@ describe("runSweep", () => {
     });
     const result = await runSweep({
       now: () => NOW,
+      loadCooldown: async () => null,
       listItems: async () => [
         item({ itemId: "a", batchId: "b1", status: "pending" }),
         item({ itemId: "b", batchId: "b2", status: "pending" }),
@@ -127,6 +133,7 @@ describe("runSweep", () => {
     await expect(
       runSweep({
         now: () => NOW,
+      loadCooldown: async () => null,
         listItems: async () => {
           throw new Error("блоб ответил 500");
         },
@@ -135,5 +142,76 @@ describe("runSweep", () => {
         triggerRender: vi.fn(async () => {}),
       })
     ).rejects.toThrow(/блоб ответил 500/);
+  });
+});
+
+describe("runSweep на паузе Instagram", () => {
+  const PAUSED = {
+    until: "2026-08-20T18:00:00.000Z",
+    since: "2026-08-20T10:00:00.000Z",
+    strikes: 4,
+    reason: "IG не опубликовал ролик (HTTP 400): User is performing too many actions",
+  };
+
+  it("переносит просроченные за паузу ролики на сетку, а не копит их к её концу", async () => {
+    // Пауза на восемь часов съедает полтора десятка слотов. Без переноса
+    // очередь выгребает их подряд сразу после паузы — мимо дневного окна и
+    // мимо лимита роликов в сутки; на проде так вышел ролик в 00:31.
+    const saved: Item[] = [];
+    const result = await runSweep({
+      now: () => NOW,
+      loadCooldown: async () => PAUSED,
+      listItems: async () => [
+        item({ itemId: "a", index: 1, status: "queued", scheduledAt: "2026-08-20T11:00:00.000Z" }),
+        item({ itemId: "b", index: 2, status: "queued", scheduledAt: "2026-08-20T12:00:00.000Z" }),
+      ],
+      saveItem: async (i) => {
+        saved.push(i);
+      },
+      nextFreeSlot: (taken) =>
+        ["2026-08-20T18:05:00.000Z", "2026-08-20T18:50:00.000Z"].find((s) => !taken.includes(s))!,
+      triggerRender: async () => {},
+    });
+
+    expect(result.respaced).toBe(2);
+    expect(saved.map((i) => [i.itemId, i.scheduledAt])).toEqual([
+      ["a", "2026-08-20T18:05:00.000Z"],
+      ["b", "2026-08-20T18:50:00.000Z"],
+    ]);
+  });
+
+  it("кончившаяся пауза расписание не трогает: просрочка догоняется как обычно", async () => {
+    const saved: Item[] = [];
+    await runSweep({
+      now: () => NOW,
+      loadCooldown: async () => ({ ...PAUSED, until: "2026-08-20T09:00:00.000Z" }),
+      listItems: async () => [
+        item({ itemId: "a", index: 1, status: "queued", scheduledAt: "2026-08-20T08:00:00.000Z" }),
+      ],
+      saveItem: async (i) => {
+        saved.push(i);
+      },
+      nextFreeSlot: () => "2026-08-20T18:05:00.000Z",
+      triggerRender: async () => {},
+    });
+
+    expect(saved).toEqual([]);
+  });
+
+  it("нечитаемая пауза не срывает будильник: расселение и пинки идут своим ходом", async () => {
+    const triggerRender = vi.fn(async (_batchId: string) => {});
+    const result = await runSweep({
+      now: () => NOW,
+      loadCooldown: async () => {
+        throw new Error("blob down");
+      },
+      listItems: async () => [item({ itemId: "a", batchId: "b1", status: "pending" })],
+      saveItem: async () => {},
+      nextFreeSlot: () => "2026-08-20T18:05:00.000Z",
+      triggerRender,
+    });
+
+    expect(triggerRender).toHaveBeenCalledWith("b1");
+    expect(result.respaced).toBe(0);
   });
 });

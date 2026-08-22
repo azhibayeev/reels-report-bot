@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { loadCooldown } from "../../../../lib/farm/cooldown";
 import { listItems, saveItem } from "../../../../lib/farm/store";
 import { nextFreeSlot, slotConfigFromEnv } from "../../../../lib/farm/slots";
 import { loadRhythm } from "../../../../lib/farm/style";
@@ -20,6 +21,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const cfg = { ...slotConfigFromEnv(), ...(rhythm ? { minutes: rhythm.minutes, perDay: rhythm.perDay } : {}) };
   const result = await runSweep({
     now: () => Date.now(),
+    loadCooldown,
     listItems,
     saveItem,
     nextFreeSlot: (taken, nowMs) => nextFreeSlot(taken, nowMs, cfg),

@@ -102,12 +102,26 @@ export async function loadCooldown(): Promise<Cooldown | null> {
   }
 }
 
-/** Человеческий текст паузы для чата: сколько стоим и до какого времени. */
+/**
+ * Человеческий текст паузы для чата: сколько стоим и до какого времени.
+ *
+ * Минуты считаем от общего остатка, а не от остатка после вычитания часов.
+ * Раздельный счёт (часы — вниз, минуты — с округлением) на проде 21–22.08.2026
+ * дал «Заливка встала на 3 ч 60 мин» и «на 7 ч 60 мин»: пауза объявляется одним
+ * вызовом часов, а печатается следующим, до круглого часа не хватает долей
+ * секунды — и 59,99 минуты округлялись до шестидесяти уже после того, как часы
+ * отбросили вниз. Перенос разряда тут делать некому, поэтому считаем один раз.
+ *
+ * Вверх, а не к ближайшему: это обратный отсчёт, и «0 мин» при двадцати
+ * оставшихся секундах читается как «уже можно», хотя ещё нельзя.
+ */
 export function formatCooldown(cooldown: Cooldown, nowMs: number, tz = "Asia/Jakarta"): string {
   const leftMs = Math.max(0, Date.parse(cooldown.until) - nowMs);
-  const hours = Math.floor(leftMs / 3_600_000);
-  const minutes = Math.round((leftMs % 3_600_000) / 60_000);
-  const left = hours > 0 ? `${hours} ч ${minutes} мин` : `${minutes} мин`;
+  const total = Math.ceil(leftMs / 60_000);
+  const hours = Math.floor(total / 60);
+  const minutes = total % 60;
+  // «2 ч 0 мин» — тот же мусор, что и «3 ч 60 мин», только с другой стороны.
+  const left = hours > 0 ? (minutes > 0 ? `${hours} ч ${minutes} мин` : `${hours} ч`) : `${minutes} мин`;
   const at = new Intl.DateTimeFormat("ru-RU", {
     timeZone: tz,
     hour: "2-digit",

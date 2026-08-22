@@ -52,3 +52,47 @@ export function normalizeSchedule(
 
   return changes;
 }
+
+/**
+ * Возврат очереди на сетку после паузы Instagram.
+ *
+ * Пауза по «too many actions» длится часами, а слоты за это время продолжают
+ * наступать. К её концу набирается полтора десятка просроченных роликов, и
+ * заливка выгребает их подряд с минимальным зазором: мимо дневного окна (на
+ * проде 22.08.2026 ролик ушёл в 00:31 при сетке, начинающейся утром) и мимо
+ * лимита роликов в сутки — сетка ограничивает частоту только пока по ней идут.
+ *
+ * Поэтому просрочку не догоняют, а переносят: каждый просроченный ролик
+ * получает свой слот сетки начиная с момента выхода из паузы, в прежнем
+ * порядке. Сколько роликов пауза съела, столько дней очередь и подвинется —
+ * зато аккаунт вернётся к тому ритму, за отклонение от которого его и наказали.
+ *
+ * Проход устойчив: после переноса просроченных не остаётся, и повторный вызов
+ * (будильник ходит каждые пять минут, а пауза — до восьми часов) не пишет ничего.
+ */
+export function rescheduleAfterPause(
+  items: Item[],
+  resumeAtMs: number,
+  nextFreeSlot: (taken: string[], nowMs: number) => string
+): SlotChange[] {
+  const inSchedule = items.filter((i) => i.scheduledAt && SLOT_TAKEN_STATUSES.has(i.status));
+  // Просрочены только те, кто ещё ждёт. У posting слот уже сработал, у posted —
+  // это история; их время занято и второй раз не выдаётся.
+  const late = inSchedule
+    .filter((i) => i.status === "queued" && Date.parse(i.scheduledAt as string) < resumeAtMs)
+    // Кто стоял раньше, тот и уходит раньше. Здесь это ещё и про ролик,
+    // поймавший блок: он стоял первым, и первым же должен выйти после паузы.
+    .sort((a, b) => Date.parse(a.scheduledAt!) - Date.parse(b.scheduledAt!) || a.index - b.index);
+  if (late.length === 0) return [];
+
+  const lateIds = new Set(late.map((i) => i.itemId));
+  const taken = inSchedule.filter((i) => !lateIds.has(i.itemId)).map((i) => i.scheduledAt as string);
+
+  const changes: SlotChange[] = [];
+  for (const item of late) {
+    const slot = nextFreeSlot(taken, resumeAtMs);
+    taken.push(slot);
+    changes.push({ itemId: item.itemId, scheduledAt: slot });
+  }
+  return changes;
+}
