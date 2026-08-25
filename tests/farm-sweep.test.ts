@@ -22,6 +22,7 @@ describe("runSweep", () => {
     const result = await runSweep({
       now: () => NOW,
       loadCooldown: async () => null,
+      onGrid: () => true,
       listItems: async () => [
         item({ itemId: "a", index: 1, status: "queued", scheduledAt: "2026-08-21T02:00:00.000Z" }),
         item({ itemId: "b", index: 2, status: "queued", scheduledAt: "2026-08-21T02:00:00.000Z" }),
@@ -44,6 +45,7 @@ describe("runSweep", () => {
     const result = await runSweep({
       now: () => NOW,
       loadCooldown: async () => null,
+      onGrid: () => true,
       listItems: async () => [
         item({ itemId: "a", batchId: "b1", status: "pending" }),
         item({ itemId: "b", batchId: "b1", status: "pending" }),
@@ -64,6 +66,7 @@ describe("runSweep", () => {
     const result = await runSweep({
       now: () => NOW,
       loadCooldown: async () => null,
+      onGrid: () => true,
       listItems: async () => [item({ status: "review" }), item({ itemId: "z", status: "posted" })],
       saveItem: async () => {},
       nextFreeSlot: () => "2026-08-21T02:00:00.000Z",
@@ -79,6 +82,7 @@ describe("runSweep", () => {
     await runSweep({
       now: () => NOW,
       loadCooldown: async () => null,
+      onGrid: () => true,
       listItems: async () => [
         item({ status: "rendering", renderingAt: new Date(NOW - 30_000).toISOString() }),
       ],
@@ -95,6 +99,7 @@ describe("runSweep", () => {
     await runSweep({
       now: () => NOW,
       loadCooldown: async () => null,
+      onGrid: () => true,
       listItems: async () => [
         item({ status: "rendering", renderingAt: new Date(NOW - 10 * 60_000).toISOString() }),
       ],
@@ -115,6 +120,7 @@ describe("runSweep", () => {
     const result = await runSweep({
       now: () => NOW,
       loadCooldown: async () => null,
+      onGrid: () => true,
       listItems: async () => [
         item({ itemId: "a", batchId: "b1", status: "pending" }),
         item({ itemId: "b", batchId: "b2", status: "pending" }),
@@ -133,7 +139,8 @@ describe("runSweep", () => {
     await expect(
       runSweep({
         now: () => NOW,
-      loadCooldown: async () => null,
+        loadCooldown: async () => null,
+        onGrid: () => true,
         listItems: async () => {
           throw new Error("блоб ответил 500");
         },
@@ -161,6 +168,7 @@ describe("runSweep на паузе Instagram", () => {
     const result = await runSweep({
       now: () => NOW,
       loadCooldown: async () => PAUSED,
+      onGrid: () => true,
       listItems: async () => [
         item({ itemId: "a", index: 1, status: "queued", scheduledAt: "2026-08-20T11:00:00.000Z" }),
         item({ itemId: "b", index: 2, status: "queued", scheduledAt: "2026-08-20T12:00:00.000Z" }),
@@ -185,6 +193,7 @@ describe("runSweep на паузе Instagram", () => {
     await runSweep({
       now: () => NOW,
       loadCooldown: async () => ({ ...PAUSED, until: "2026-08-20T09:00:00.000Z" }),
+      onGrid: () => true,
       listItems: async () => [
         item({ itemId: "a", index: 1, status: "queued", scheduledAt: "2026-08-20T08:00:00.000Z" }),
       ],
@@ -205,6 +214,7 @@ describe("runSweep на паузе Instagram", () => {
       loadCooldown: async () => {
         throw new Error("blob down");
       },
+      onGrid: () => true,
       listItems: async () => [item({ itemId: "a", batchId: "b1", status: "pending" })],
       saveItem: async () => {},
       nextFreeSlot: () => "2026-08-20T18:05:00.000Z",
@@ -213,5 +223,67 @@ describe("runSweep на паузе Instagram", () => {
 
     expect(triggerRender).toHaveBeenCalledWith("b1");
     expect(result.respaced).toBe(0);
+  });
+});
+
+describe("runSweep: очередь на сетке текущего темпа", () => {
+  it("темп сменился — очередь пересобирается на новую сетку", async () => {
+    const saved: Item[] = [];
+    const result = await runSweep({
+      now: () => NOW,
+      loadCooldown: async () => null,
+      // Слоты сетки 45 минут после смены темпа на 180 перестали ей принадлежать.
+      onGrid: (iso) => iso === "2026-08-21T03:00:00.000Z" || iso === "2026-08-21T06:00:00.000Z",
+      listItems: async () => [
+        item({ itemId: "a", index: 1, status: "queued", scheduledAt: "2026-08-21T02:00:00.000Z" }),
+        item({ itemId: "b", index: 2, status: "queued", scheduledAt: "2026-08-21T02:45:00.000Z" }),
+      ],
+      saveItem: async (i) => {
+        saved.push(i);
+      },
+      nextFreeSlot: (taken) =>
+        taken.includes("2026-08-21T03:00:00.000Z") ? "2026-08-21T06:00:00.000Z" : "2026-08-21T03:00:00.000Z",
+      triggerRender: async () => {},
+    });
+
+    expect(result.respaced).toBe(2);
+    expect(saved.map((i) => i.scheduledAt)).toEqual(["2026-08-21T03:00:00.000Z", "2026-08-21T06:00:00.000Z"]);
+  });
+
+  it("очередь уже на сетке — не пишет ничего", async () => {
+    const saveItem = vi.fn(async (_i: Item) => {});
+    const result = await runSweep({
+      now: () => NOW,
+      loadCooldown: async () => null,
+      onGrid: () => true,
+      listItems: async () => [
+        item({ itemId: "a", index: 1, status: "queued", scheduledAt: "2026-08-21T03:00:00.000Z" }),
+      ],
+      saveItem,
+      nextFreeSlot: () => "2026-08-21T09:00:00.000Z",
+      triggerRender: async () => {},
+    });
+
+    expect(result.respaced).toBe(0);
+    expect(saveItem).not.toHaveBeenCalled();
+  });
+
+  it("вне паузы опоздавший ролик очередь не перетряхивает", async () => {
+    const saveItem = vi.fn(async (_i: Item) => {});
+    const result = await runSweep({
+      now: () => NOW,
+      loadCooldown: async () => null,
+      onGrid: () => true,
+      listItems: async () => [
+        // Слот прошёл десять минут назад: внешний таймер опоздал, но ролик цел.
+        item({ itemId: "a", index: 1, status: "queued", scheduledAt: new Date(NOW - 600_000).toISOString() }),
+      ],
+      saveItem,
+      nextFreeSlot: () => "2026-08-21T09:00:00.000Z",
+      triggerRender: async () => {},
+    });
+
+    expect(result.respaced).toBe(0);
+    expect(saveItem).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,6 @@
 import { batchesToKick } from "./commands";
 import { Cooldown, isPaused } from "./cooldown";
-import { normalizeSchedule, rescheduleAfterPause, SlotChange } from "./schedule";
+import { normalizeSchedule, queueOffGrid, regrid, SlotChange } from "./schedule";
 import { Item } from "./types";
 
 /**
@@ -24,10 +24,15 @@ export interface SweepDeps {
   nextFreeSlot: (taken: string[], nowMs: number) => string;
   /**
    * Пауза, объявленная Instagram (см. lib/farm/cooldown.ts). Будильнику она
-   * нужна не чтобы стоять — он ничего не публикует, — а чтобы вовремя убрать
-   * просрочку, которую пауза копит: см. rescheduleAfterPause.
+   * нужна не чтобы стоять — он ничего не публикует, — а чтобы знать, с какого
+   * момента очередь вообще имеет право стоять: см. regrid.
    */
   loadCooldown: () => Promise<Cooldown | null>;
+  /**
+   * Принадлежит ли время сетке текущего темпа (isOnGrid в lib/farm/slots.ts).
+   * Роут собирает эту функцию из темпа, а будильник только спрашивает.
+   */
+  onGrid: (iso: string) => boolean;
 }
 
 export interface SweepResult {
@@ -43,10 +48,11 @@ export async function runSweep(deps: SweepDeps): Promise<SweepResult> {
   const items = await deps.listItems();
   const batches = batchesToKick(items, deps.now());
 
-  // Пауза Instagram копит просрочку: слоты наступают, а публиковать нельзя.
-  // К концу восьмичасовой паузы просроченных набирается полтора десятка, и
-  // заливка выгребает их подряд — мимо дневного окна и мимо лимита роликов в
-  // сутки. Поэтому переносим их на сетку от момента выхода из паузы.
+  // Съехать с сетки очередь может по двум причинам, и лечатся они одинаково:
+  // пауза Instagram (слоты наступали, а публиковать было нельзя) и смена темпа
+  // (сетка стала другой). Поэтому здесь не событие, а правило: очередь обязана
+  // стоять на сетке текущего темпа начиная с пола — и если это не так,
+  // пересобираем целиком.
   let cooldown: Cooldown | null = null;
   try {
     cooldown = await deps.loadCooldown();
@@ -55,10 +61,13 @@ export async function runSweep(deps: SweepDeps): Promise<SweepResult> {
     // от неё не зависят, а перенос попробуем на следующем проходе.
     console.error("farm sweep: пауза не прочиталась, расписание не переносим", error);
   }
+  const paused = isPaused(cooldown, deps.now());
+  const floor = paused ? Date.parse((cooldown as Cooldown).until) : deps.now();
+
   const changes: SlotChange[] = [];
   let scheduled = items;
-  if (isPaused(cooldown, deps.now())) {
-    const moved = rescheduleAfterPause(items, Date.parse((cooldown as Cooldown).until), deps.nextFreeSlot);
+  if (queueOffGrid(items, floor, paused, deps.onGrid)) {
+    const moved = regrid(items, floor, deps.nextFreeSlot);
     if (moved.length) {
       changes.push(...moved);
       // Дальше расселение должно видеть уже новые времена, иначе оно приняло бы

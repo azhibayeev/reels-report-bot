@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { loadCooldown } from "../../../../lib/farm/cooldown";
 import { listItems, saveItem } from "../../../../lib/farm/store";
-import { nextFreeSlot, slotConfigFromEnv } from "../../../../lib/farm/slots";
-import { loadRhythm } from "../../../../lib/farm/style";
+import { loadPace, paceSlotConfig } from "../../../../lib/farm/pace";
+import { isOnGrid, nextFreeSlot } from "../../../../lib/farm/slots";
 import { runSweep } from "../../../../lib/farm/sweep";
 import { triggerRender } from "../../../../lib/farm/tick";
 
@@ -17,11 +17,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const rhythm = await loadRhythm();
-  const cfg = { ...slotConfigFromEnv(), ...(rhythm ? { minutes: rhythm.minutes, perDay: rhythm.perDay } : {}) };
+  // Сетку собираем один раз на проход: и выдача свободного слота, и проверка
+  // «а на сетке ли очередь» обязаны говорить об одном и том же темпе.
+  const cfg = paceSlotConfig(await loadPace());
   const result = await runSweep({
     now: () => Date.now(),
     loadCooldown,
+    onGrid: (iso) => isOnGrid(iso, cfg),
     listItems,
     saveItem,
     nextFreeSlot: (taken, nowMs) => nextFreeSlot(taken, nowMs, cfg),
