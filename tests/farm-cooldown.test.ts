@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { COOLDOWN_STEPS_MS, formatCooldown, isPaused, nextCooldown, STRIKE_RESET_MS } from "../lib/farm/cooldown";
+import { Cooldown, COOLDOWN_STEPS_MS, formatCooldown, isPaused, nextCooldown, STRIKE_RESET_MS } from "../lib/farm/cooldown";
 import { isRateBlock, lastPostedAt, postOne, publishGapMs, runPostTick, PostDeps, PostTickDeps } from "../lib/farm/post";
 import { rateBlockedItems } from "../lib/farm/commands";
+import { Pace } from "../lib/farm/pace";
 import { Item } from "../lib/farm/types";
 
 // Дословно то, что пришло с прода 21.08.2026 — шесть роликов подряд легли на
@@ -17,6 +18,13 @@ const base: Item = {
 };
 const NOW = Date.parse("2026-08-21T05:15:00.000Z");
 
+const PACE: Pace = {
+  minutes: 180,
+  changedAt: new Date(NOW - 86_400_000).toISOString(),
+  publishedSince: 0,
+  reason: "manual",
+};
+
 function makeDeps(overrides: Partial<PostDeps> = {}): PostDeps {
   return {
     now: () => NOW,
@@ -29,10 +37,12 @@ function makeDeps(overrides: Partial<PostDeps> = {}): PostDeps {
     }),
     fetchPermalink: vi.fn(async () => ""),
     deleteBlobQuiet: vi.fn(async () => {}),
-    notify: vi.fn(async () => {}),
+    notify: vi.fn(async (_text: string, _thread: number | null, _chat?: number) => {}),
     recordPublication: vi.fn(async () => {}),
     loadCooldown: vi.fn(async () => null),
     saveCooldown: vi.fn(async () => {}),
+    loadPace: vi.fn(async () => PACE),
+    savePace: vi.fn(async () => {}),
     ...overrides,
   };
 }
@@ -121,7 +131,7 @@ describe("postOne на блоке по частоте", () => {
     // runPostTick в Instagram не ходит вовсе, а на сетку очередь возвращает
     // будильник (rescheduleAfterPause), и там прежний порядок как раз и решает.
     const saveItem = vi.fn(async (_item: Item) => {});
-    const saveCooldown = vi.fn(async () => {});
+    const saveCooldown = vi.fn(async (_cooldown: Cooldown) => {});
     await postOne(base, makeDeps({ saveItem, saveCooldown }));
 
     const last = saveItem.mock.calls.map((c) => c[0] as Item).at(-1)!;
@@ -129,7 +139,7 @@ describe("postOne на блоке по частоте", () => {
   });
 
   it("объявляет паузу всей заливке", async () => {
-    const saveCooldown = vi.fn(async () => {});
+    const saveCooldown = vi.fn(async (_cooldown: Cooldown) => {});
     await postOne(base, makeDeps({ saveCooldown }));
 
     expect(saveCooldown).toHaveBeenCalledTimes(1);
@@ -137,14 +147,14 @@ describe("postOne на блоке по частоте", () => {
   });
 
   it("сообщает человеку один раз, а не по ролику на каждый слот", async () => {
-    const notify = vi.fn(async () => {});
+    const notify = vi.fn(async (_text: string, _thread: number | null, _chat?: number) => {});
     const running = {
       until: new Date(NOW + 30 * 60_000).toISOString(),
       since: new Date(NOW - 30 * 60_000).toISOString(),
       strikes: 1,
       reason: BLOCK,
     };
-    const saveCooldown = vi.fn(async () => {});
+    const saveCooldown = vi.fn(async (_cooldown: Cooldown) => {});
     // Пауза уже идёт, но ролик всё равно дошёл до Graph — так бывает, когда
     // другой инстанс ещё не увидел записи в Blob.
     await postOne(base, makeDeps({ notify, saveCooldown, loadCooldown: async () => running }));
@@ -155,7 +165,7 @@ describe("postOne на блоке по частоте", () => {
   });
 
   it("в первом сообщении есть и причина, и срок", async () => {
-    const notify = vi.fn(async () => {});
+    const notify = vi.fn(async (_text: string, _thread: number | null, _chat?: number) => {});
     await postOne(base, makeDeps({ notify }));
 
     const text = notify.mock.calls[0][0] as string;
@@ -350,5 +360,54 @@ describe("formatCooldown", () => {
     const cooldown = { until, since: new Date(NOW).toISOString(), strikes: 1, reason: BLOCK };
 
     expect(formatCooldown(cooldown, NOW)).toMatch(/^1 мин \(до /);
+  });
+});
+
+describe("темп на блоке", () => {
+  it("сбавляет темп и говорит об этом той же строкой, что и о паузе", async () => {
+    // Пауза лечит симптом: она пережидает блок, но следующий приходит тем же
+    // путём. Причина — темп выше того, что аккаунт переваривает.
+    const savePace = vi.fn(async (_p: Pace) => {});
+    const notify = vi.fn(async (_text: string, _thread: number | null, _chat?: number) => {});
+    await postOne(base, makeDeps({ savePace, notify }));
+
+    expect(savePace.mock.calls.at(-1)![0].minutes).toBe(240);
+    const text = notify.mock.calls.map((c) => c[0] as string).join("\n");
+    expect(text).toContain("Сбавил темп");
+    expect(text).toContain("раз в 4 ч");
+  });
+
+  it("на потолке сообщает, что дело не в частоте", async () => {
+    const notify = vi.fn(async (_text: string, _thread: number | null, _chat?: number) => {});
+    const atLimit: Pace = { ...PACE, minutes: 240, reason: "block" };
+    await postOne(base, makeDeps({ notify, loadPace: async () => atLimit }));
+
+    expect(notify.mock.calls.map((c) => c[0] as string).join("\n")).toContain("Дело не в частоте");
+  });
+
+  it("нечитаемый темп не мешает объявить паузу", async () => {
+    const saveCooldown = vi.fn(async (_cooldown: Cooldown) => {});
+    await postOne(
+      base,
+      makeDeps({
+        saveCooldown,
+        loadPace: async () => {
+          throw new Error("Blob недоступен");
+        },
+      })
+    );
+
+    expect(saveCooldown).toHaveBeenCalled();
+  });
+
+  it("на уже идущей паузе темп второй раз не трогает", async () => {
+    // Другой инстанс не увидел записи в Blob и всё же дошёл до Graph: это тот
+    // же блок, а не новый, и сбавлять на него ещё раз значило бы наказать
+    // ферму дважды за одно.
+    const savePace = vi.fn(async (_p: Pace) => {});
+    const running = { until: new Date(NOW + 3_600_000).toISOString(), since: new Date(NOW).toISOString(), strikes: 1, reason: BLOCK };
+    await postOne(base, makeDeps({ savePace, loadCooldown: async () => running }));
+
+    expect(savePace).not.toHaveBeenCalled();
   });
 });

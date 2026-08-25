@@ -5,7 +5,7 @@ import { sendMessage } from "../telegram";
 import { requireEnv } from "./tick";
 import { resolveFarmToken } from "./token-store";
 import { Cooldown, formatCooldown, isPaused, loadCooldown, nextCooldown, saveCooldown } from "./cooldown";
-import { loadRhythm } from "./style";
+import { afterBlock, afterPublish, CLEAN_RUN, defaultPace, describePace, loadPace, Pace, savePace } from "./pace";
 import { slotConfigFromEnv } from "./slots";
 import { PublicationRecord, recordPublication, toRecord } from "./journal";
 import { Item } from "./types";
@@ -33,6 +33,9 @@ export interface PostDeps {
   /** Пауза заливки, объявленная Instagram — см. lib/farm/cooldown.ts. */
   loadCooldown: () => Promise<Cooldown | null>;
   saveCooldown: (cooldown: Cooldown) => Promise<void>;
+  /** Темп заливки — см. lib/farm/pace.ts. Блок сбавляет его, чистая серия прибавляет. */
+  loadPace: () => Promise<Pace | null>;
+  savePace: (pace: Pace) => Promise<void>;
 }
 
 export interface PostTickDeps extends PostDeps {
@@ -243,12 +246,12 @@ async function postOneLocked(item: Item, deps: PostDeps): Promise<void> {
     // которое эта проверка лишь сужает, а не закрывает — compare-and-set нет).
     // Если кто-то уже успел сохранить "posted" с ДРУГИМ igMediaId, на аккаунте
     // дубль — молчать об этом нельзя.
-    const afterPublish = await deps.loadItem(fresh.itemId);
-    if (afterPublish?.status === "posted" && afterPublish.igMediaId && afterPublish.igMediaId !== mediaId) {
+    const afterPublishItem = await deps.loadItem(fresh.itemId);
+    if (afterPublishItem?.status === "posted" && afterPublishItem.igMediaId && afterPublishItem.igMediaId !== mediaId) {
       console.error(
         "farm postOne: дубль на аккаунте — оба инстанса опубликовали один ролик",
         fresh.itemId,
-        { ours: mediaId, theirs: afterPublish.igMediaId }
+        { ours: mediaId, theirs: afterPublishItem.igMediaId }
       );
       await notifyQuiet(
         `Внимание: ролик ${fresh.index}/${fresh.total} мог опубликоваться на аккаунте дважды — проверьте ленту`
@@ -288,6 +291,23 @@ async function postOneLocked(item: Item, deps: PostDeps): Promise<void> {
         // связь «хук → рилс» потеряется, когда уборка снесёт farm/items/.
         console.error("farm postOne: публикация не записана в журнал", fresh.itemId, mediaId, journalError);
       }
+    }
+    // Чистая серия — единственное доказательство, что темп безопасен, и считать
+    // её надо по факту залитых роликов: пустая очередь двое суток ничего не
+    // доказывает.
+    try {
+      const { pace, sped } = afterPublish((await deps.loadPace()) ?? defaultPace(deps.now()), deps.now());
+      await deps.savePace(pace);
+      if (sped) {
+        await notifyQuiet(
+          `${CLEAN_RUN} роликов подряд без единого блока — ускоряюсь: ${describePace(pace)}. ` +
+            `Очередь пересоберётся ближайшим проходом будильника.`
+        );
+      }
+    } catch (paceError) {
+      // Ролик уже на аккаунте, падать нельзя: несчитанная публикация лишь
+      // отодвинет ускорение на один круг.
+      console.error("farm postOne: темп не обновлён после публикации", fresh.itemId, paceError);
     }
     await deleteVideoQuiet();
   } catch (error) {
@@ -359,6 +379,30 @@ async function postOneLocked(item: Item, deps: PostDeps): Promise<void> {
       // ничто не мешает: пока пауза идёт, runPostTick в Instagram не ходит
       // вовсе, а на сетку очередь возвращает будильник (rescheduleAfterPause в
       // lib/farm/schedule.ts) — и там прежний порядок как раз и решает.
+      // Пауза лечит симптом: она пережидает блок, но следующий приходит ровно
+      // тем же путём. Причина — темп выше того, что аккаунт переваривает,
+      // поэтому блок обязан ещё и сбавлять темп, а не только останавливать
+      // заливку. На уже идущей паузе руль не трогаем: это тот же блок, а не новый.
+      let paceLine = "";
+      if (!running) {
+        try {
+          const { pace, slowed, atLimit } = afterBlock((await deps.loadPace()) ?? defaultPace(deps.now()), deps.now());
+          await deps.savePace(pace);
+          if (slowed) {
+            paceLine =
+              `\n\nСбавил темп: ${describePace(pace)}. ` +
+              `Очередь пересоберётся ближайшим проходом будильника.`;
+          } else if (atLimit) {
+            paceLine =
+              `\n\nСбавил до предела — ${describePace(pace)}, и всё равно блок. ` +
+              `Дело не в частоте: проверьте аккаунт руками.`;
+          }
+        } catch (paceError) {
+          // Несбавленный темп — это лишь «попробуем в следующий раз». Пауза
+          // важнее: без неё очередь продолжит долбить в ту же стену.
+          console.error("farm postOne: темп не сбавлен", fresh.itemId, paceError);
+        }
+      }
       console.error("farm postOne: Instagram ограничил частоту, заливка на паузе", fresh.itemId, cooldown.until, message);
       // Попытку не тратим: ролик ни в чём не виноват, виновата частота.
       await deps.saveItem({ ...fresh, status: "queued", postingAt: null, error: message });
@@ -367,7 +411,8 @@ async function postOneLocked(item: Item, deps: PostDeps): Promise<void> {
           `Instagram ограничил частоту публикаций: «${message}»\n\n` +
             `Заливка встала на ${formatCooldown(cooldown, deps.now())}. ` +
             `Ролики не потеряны — они ждут в очереди и пойдут сами, когда пауза кончится. ` +
-            `Проверить очередь: /reels`
+            `Проверить очередь: /reels` +
+            paceLine
         );
       }
       return;
@@ -478,13 +523,15 @@ export async function livePostTickDeps(): Promise<PostTickDeps> {
   const token = await resolveFarmToken();
   const igUserId = requireEnv("FARM_IG_ID");
   const publishDeps = { token, igUserId };
-  // Ритм из состояния, как и везде: команда /rhythm переживает деплой, а
-  // переменные окружения — только начальное значение.
-  const rhythm = await loadRhythm();
+  // Темп из состояния, как и везде: он переживает деплой, а переменные
+  // окружения дают только начальное значение.
+  const pace = await loadPace();
   return {
-    minGapMs: publishGapMs(rhythm?.minutes ?? slotConfigFromEnv().minutes),
+    minGapMs: publishGapMs(pace?.minutes ?? slotConfigFromEnv().minutes),
     loadCooldown,
     saveCooldown,
+    loadPace,
+    savePace,
     now: () => Date.now(),
     loadItem,
     saveItem,

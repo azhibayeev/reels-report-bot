@@ -72,6 +72,8 @@ describe("A. два тика заливки на один ролик", () => {
       notify: async () => {},
       recordPublication: async () => {},
       loadCooldown: async () => null,
+      loadPace: async () => null,
+      savePace: async () => {},
       saveCooldown: async () => {},
     });
 
@@ -225,6 +227,8 @@ describe("F. Graph API отвечает 429 при создании контей
       notify: async () => {},
       recordPublication: async () => {},
       loadCooldown: async () => null,
+      loadPace: async () => null,
+      savePace: async () => {},
       saveCooldown: async () => {},
     };
 

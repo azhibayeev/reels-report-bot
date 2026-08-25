@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { pickDue, postOne, runPostTick, PostDeps, PostTickDeps } from "../lib/farm/post";
+import { Pace } from "../lib/farm/pace";
 import { TAKEOVER_MS } from "../lib/farm/tick";
 import { Item } from "../lib/farm/types";
 
@@ -34,6 +35,13 @@ describe("pickDue", () => {
   });
 });
 
+const PACE: Pace = {
+  minutes: 180,
+  changedAt: new Date(NOW - 86_400_000).toISOString(),
+  publishedSince: 0,
+  reason: "manual",
+};
+
 function makeDeps(overrides: Partial<PostDeps> = {}): PostDeps {
   return {
     now: () => NOW,
@@ -44,10 +52,12 @@ function makeDeps(overrides: Partial<PostDeps> = {}): PostDeps {
     publishContainer: vi.fn(async () => "M1"),
     fetchPermalink: vi.fn(async () => "https://instagram.com/reel/M1"),
     deleteBlobQuiet: vi.fn(async () => {}),
-    notify: vi.fn(async () => {}),
+    notify: vi.fn(async (_text: string, _thread: number | null, _chat?: number) => {}),
     recordPublication: vi.fn(async () => {}),
     loadCooldown: vi.fn(async () => null),
     saveCooldown: vi.fn(async () => {}),
+    loadPace: vi.fn(async () => PACE),
+    savePace: vi.fn(async () => {}),
     ...overrides,
   };
 }
@@ -432,5 +442,40 @@ describe("runPostTick", () => {
   it("нечего брать — возвращает 0", async () => {
     const deps: PostTickDeps = { ...makeDeps(), listItems: async () => [] };
     expect(await runPostTick(deps, 1)).toBe(0);
+  });
+});
+
+describe("темп на чистой серии", () => {
+  it("обычная публикация только считает: темп не трогает и молчит", async () => {
+    const savePace = vi.fn(async (_p: Pace) => {});
+    const notify = vi.fn(async (_text: string, _thread: number | null, _chat?: number) => {});
+    await postOne(base, makeDeps({ savePace, notify, loadPace: async () => ({ ...PACE, publishedSince: 3 }) }));
+
+    expect(savePace.mock.calls.at(-1)![0]).toMatchObject({ minutes: 180, publishedSince: 4 });
+    expect(notify.mock.calls.map((c) => c[0] as string).join("\n")).not.toContain("ускоряюсь");
+  });
+
+  it("двенадцатая публикация подряд ускоряет темп и сообщает об этом", async () => {
+    const savePace = vi.fn(async (_p: Pace) => {});
+    const notify = vi.fn(async (_text: string, _thread: number | null, _chat?: number) => {});
+    await postOne(base, makeDeps({ savePace, notify, loadPace: async () => ({ ...PACE, publishedSince: 11 }) }));
+
+    expect(savePace.mock.calls.at(-1)![0]).toMatchObject({ minutes: 160, publishedSince: 0 });
+    expect(notify.mock.calls.map((c) => c[0] as string).join("\n")).toContain("ускоряюсь");
+  });
+
+  it("несохранённый темп не отменяет публикацию: ролик уже на аккаунте", async () => {
+    const notify = vi.fn(async (_text: string, _thread: number | null, _chat?: number) => {});
+    await postOne(
+      base,
+      makeDeps({
+        notify,
+        savePace: async () => {
+          throw new Error("Blob недоступен");
+        },
+      })
+    );
+
+    expect(notify.mock.calls.map((c) => c[0] as string).join("\n")).toContain("Залил");
   });
 });
