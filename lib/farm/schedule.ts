@@ -54,45 +54,64 @@ export function normalizeSchedule(
 }
 
 /**
- * Возврат очереди на сетку после паузы Instagram.
+ * Возврат очереди на сетку текущего темпа.
  *
- * Пауза по «too many actions» длится часами, а слоты за это время продолжают
- * наступать. К её концу набирается полтора десятка просроченных роликов, и
- * заливка выгребает их подряд с минимальным зазором: мимо дневного окна (на
- * проде 22.08.2026 ролик ушёл в 00:31 при сетке, начинающейся утром) и мимо
- * лимита роликов в сутки — сетка ограничивает частоту только пока по ней идут.
+ * Обобщение прежней rescheduleAfterPause, которая двигала только просроченные
+ * за паузу ролики. Поводов съехать с сетки два, и лечатся они одинаково: пауза
+ * Instagram (слоты наступали, а публиковать было нельзя) и смена темпа (сетка
+ * стала другой, и прежние слоты ей больше не принадлежат).
  *
- * Поэтому просрочку не догоняют, а переносят: каждый просроченный ролик
- * получает свой слот сетки начиная с момента выхода из паузы, в прежнем
- * порядке. Сколько роликов пауза съела, столько дней очередь и подвинется —
- * зато аккаунт вернётся к тому ритму, за отклонение от которого его и наказали.
+ * Просрочку не догоняют, а переносят: каждый ролик получает свой слот сетки
+ * начиная с пола, в прежнем порядке. Сколько времени пауза съела, на столько
+ * очередь и подвинется — зато аккаунт вернётся к тому ритму, за отклонение от
+ * которого его и наказали.
  *
- * Проход устойчив: после переноса просроченных не остаётся, и повторный вызов
- * (будильник ходит каждые пять минут, а пауза — до восьми часов) не пишет ничего.
+ * Возвращаем только настоящие переносы: ролик, который и так стоит на своём
+ * месте, писать в Blob незачем, а на этом же держится идемпотентность прохода.
  */
-export function rescheduleAfterPause(
+export function regrid(
   items: Item[],
-  resumeAtMs: number,
+  floorMs: number,
   nextFreeSlot: (taken: string[], nowMs: number) => string
 ): SlotChange[] {
   const inSchedule = items.filter((i) => i.scheduledAt && SLOT_TAKEN_STATUSES.has(i.status));
-  // Просрочены только те, кто ещё ждёт. У posting слот уже сработал, у posted —
-  // это история; их время занято и второй раз не выдаётся.
-  const late = inSchedule
-    .filter((i) => i.status === "queued" && Date.parse(i.scheduledAt as string) < resumeAtMs)
+  const queued = inSchedule
+    .filter((i) => i.status === "queued")
     // Кто стоял раньше, тот и уходит раньше. Здесь это ещё и про ролик,
-    // поймавший блок: он стоял первым, и первым же должен выйти после паузы.
+    // поймавший блок: он стоял первым и первым же должен выйти после паузы.
     .sort((a, b) => Date.parse(a.scheduledAt!) - Date.parse(b.scheduledAt!) || a.index - b.index);
-  if (late.length === 0) return [];
+  if (queued.length === 0) return [];
 
-  const lateIds = new Set(late.map((i) => i.itemId));
-  const taken = inSchedule.filter((i) => !lateIds.has(i.itemId)).map((i) => i.scheduledAt as string);
+  // posting и posted своё время уже отработали: занять его вторично значило бы
+  // вернуть ту самую слипшуюся сетку, ради которой всё и затевалось.
+  const taken = inSchedule.filter((i) => i.status !== "queued").map((i) => i.scheduledAt as string);
 
   const changes: SlotChange[] = [];
-  for (const item of late) {
-    const slot = nextFreeSlot(taken, resumeAtMs);
+  for (const item of queued) {
+    const slot = nextFreeSlot(taken, floorMs);
     taken.push(slot);
-    changes.push({ itemId: item.itemId, scheduledAt: slot });
+    if (slot !== item.scheduledAt) changes.push({ itemId: item.itemId, scheduledAt: slot });
   }
   return changes;
+}
+
+/**
+ * Стоит ли очередь не там, где должна.
+ *
+ * Опоздавший ролик ВНЕ паузы поводом не считается: он не сломан, он наступил, и
+ * его дело — опубликоваться. Иначе двухминутное опоздание внешнего таймера
+ * перетряхивало бы всю очередь на каждом проходе будильника.
+ */
+export function queueOffGrid(
+  items: Item[],
+  floorMs: number,
+  paused: boolean,
+  onGrid: (iso: string) => boolean
+): boolean {
+  return items.some(
+    (i) =>
+      i.status === "queued" &&
+      i.scheduledAt !== null &&
+      (!onGrid(i.scheduledAt) || (paused && Date.parse(i.scheduledAt) < floorMs))
+  );
 }

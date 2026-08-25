@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeSchedule, rescheduleAfterPause } from "../lib/farm/schedule";
+import { normalizeSchedule, queueOffGrid, regrid } from "../lib/farm/schedule";
 import { Item } from "../lib/farm/types";
 
 const base: Item = {
@@ -95,14 +95,14 @@ const RESUME = Date.parse("2026-08-20T20:00:00.000Z");
 const lateGrid = Array.from({ length: 40 }, (_, i) => new Date(RESUME + i * 45 * 60_000).toISOString());
 const nextFreeAfterResume = (taken: string[]) => lateGrid.find((s) => !taken.includes(s))!;
 
-describe("rescheduleAfterPause", () => {
-  it("просроченные за паузу ролики уходят на сетку, а не вываливаются разом", () => {
+describe("regrid", () => {
+  it("ставит очередь на сетку от пола, а не вываливает разом", () => {
     // Ровно то, что вышло на проде 22.08.2026: пауза на восемь часов, за неё
     // просрочилось полтора десятка слотов, и после паузы очередь пошла подряд
     // — в том числе ночью, мимо дневного окна и мимо лимита роликов в сутки.
     const items = [q(1, grid[0]), q(2, grid[1]), q(3, grid[2])];
 
-    const changes = rescheduleAfterPause(items, RESUME, nextFreeAfterResume);
+    const changes = regrid(items, RESUME, nextFreeAfterResume);
 
     expect(changes.map((c) => c.scheduledAt)).toEqual([lateGrid[0], lateGrid[1], lateGrid[2]]);
   });
@@ -113,38 +113,64 @@ describe("rescheduleAfterPause", () => {
     // ранний слот, а конец паузы позже любого из них.
     const items = [q(7, grid[3]), q(4, grid[0]), q(5, grid[1])];
 
-    const changes = rescheduleAfterPause(items, RESUME, nextFreeAfterResume);
-    const first = changes.find((c) => c.scheduledAt === lateGrid[0])!;
+    const changes = regrid(items, RESUME, nextFreeAfterResume);
 
-    expect(first.itemId).toBe("i4");
+    expect(changes.find((c) => c.scheduledAt === lateGrid[0])!.itemId).toBe("i4");
   });
 
-  it("повторный проход ничего не двигает: пауза длинная, а будильник частый", () => {
+  it("повторный проход ничего не двигает", () => {
     const items = [q(1, grid[0]), q(2, grid[1])];
-    for (const c of rescheduleAfterPause(items, RESUME, nextFreeAfterResume)) {
+    for (const c of regrid(items, RESUME, nextFreeAfterResume)) {
       items.find((i) => i.itemId === c.itemId)!.scheduledAt = c.scheduledAt;
     }
 
-    expect(rescheduleAfterPause(items, RESUME, nextFreeAfterResume)).toEqual([]);
+    expect(regrid(items, RESUME, nextFreeAfterResume)).toEqual([]);
   });
 
-  it("тех, чей слот и так после паузы, не трогает — их время не прошло", () => {
+  it("дыры в сетке подбирает: после смены темпа очередь идёт сплошняком с пола", () => {
+    // В отличие от прежней rescheduleAfterPause, которая трогала только
+    // просроченные, здесь пересобирается вся очередь — иначе после смены темпа
+    // часть роликов осталась бы на старой сетке.
     const items = [q(1, lateGrid[5])];
-    expect(rescheduleAfterPause(items, RESUME, nextFreeAfterResume)).toEqual([]);
+
+    expect(regrid(items, RESUME, nextFreeAfterResume)).toEqual([{ itemId: "i1", scheduledAt: lateGrid[0] }]);
   });
 
-  it("занятое время второй раз не выдаёт", () => {
-    // posted/posting держат свои слоты: они уже сработали, и наложить на них
-    // просроченный ролик значило бы вернуть ту же слипшуюся сетку.
+  it("занятое время posted и posting второй раз не выдаёт", () => {
+    // Они уже сработали, и наложить на них просроченный ролик значило бы
+    // вернуть ту же слипшуюся сетку.
     const items = [q(1, grid[0]), q(2, lateGrid[0], { status: "posted" })];
 
-    const changes = rescheduleAfterPause(items, RESUME, nextFreeAfterResume);
-
-    expect(changes).toEqual([{ itemId: "i1", scheduledAt: lateGrid[1] }]);
+    expect(regrid(items, RESUME, nextFreeAfterResume)).toEqual([{ itemId: "i1", scheduledAt: lateGrid[1] }]);
   });
 
   it("упавших и выкинутых в расписание не возвращает", () => {
     const items = [q(1, grid[0], { status: "failed" }), q(2, grid[1], { status: "rejected" })];
-    expect(rescheduleAfterPause(items, RESUME, nextFreeAfterResume)).toEqual([]);
+    expect(regrid(items, RESUME, nextFreeAfterResume)).toEqual([]);
+  });
+});
+
+describe("queueOffGrid", () => {
+  const onGrid = (iso: string) => lateGrid.includes(iso);
+
+  it("сетка сменилась — пересобирать надо", () => {
+    expect(queueOffGrid([q(1, grid[0])], RESUME, false, onGrid)).toBe(true);
+  });
+
+  it("очередь уже на сетке — не надо", () => {
+    expect(queueOffGrid([q(1, lateGrid[3])], RESUME, false, onGrid)).toBe(false);
+  });
+
+  it("во время паузы просроченный ролик пересборку запускает", () => {
+    expect(queueOffGrid([q(1, lateGrid[0])], RESUME + 60_000, true, onGrid)).toBe(true);
+  });
+
+  it("вне паузы опоздавший ролик пересборку НЕ запускает: он не сломан, он наступил", () => {
+    // Иначе двухминутное опоздание внешнего таймера перетряхивало бы всю очередь.
+    expect(queueOffGrid([q(1, lateGrid[0])], RESUME + 60_000, false, onGrid)).toBe(false);
+  });
+
+  it("не-queued статусы не смотрит", () => {
+    expect(queueOffGrid([q(1, grid[0], { status: "posted" })], RESUME, false, onGrid)).toBe(false);
   });
 });
