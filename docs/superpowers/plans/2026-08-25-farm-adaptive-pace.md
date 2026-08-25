@@ -557,91 +557,15 @@ git commit -m "feat(farm): темп заливки как состояние с 
 
 ---
 
-### Task 3: Чтение задач мимо кэша
+### Task 3: ~~Чтение задач мимо кэша~~ — отменена
 
-**Files:**
-- Modify: `lib/farm/store.ts`
-- Test: `tests/farm-store.test.ts`
+Задача снята 25.08 при выполнении: её посылка оказалась неверной. `listItems` **уже** читает
+мимо кэша — обход спрятан в `fetchOnce` (`lib/farm/store.ts:60`), который всегда добавляет
+`?ts=` и `cache: "no-store"`.
 
-**Interfaces:**
-- Produces: `listItems(opts?: { fresh?: boolean }): Promise<Item[]>`
-
-- [ ] **Step 1: Написать падающий тест**
-
-Дописать в `tests/farm-store.test.ts` (внутри существующего блока про `listItems`; мок `fetch` в этом файле уже есть — использовать тот же приём, что и соседние тесты):
-
-```ts
-it("с fresh читает мимо кэша: проход, который пишет сразу после чтения, не должен видеть стухшую запись", async () => {
-  const urls: string[] = [];
-  vi.stubGlobal("fetch", async (url: string) => {
-    urls.push(String(url));
-    return { ok: true, json: async () => ({ itemId: "a", index: 1, status: "queued" }) } as unknown as Response;
-  });
-
-  await listItems({ fresh: true });
-
-  expect(urls.every((u) => u.includes("?ts="))).toBe(true);
-});
-
-it("без fresh кэш не обходит: /reels и страница расписания читают десятки блобов", async () => {
-  const urls: string[] = [];
-  vi.stubGlobal("fetch", async (url: string) => {
-    urls.push(String(url));
-    return { ok: true, json: async () => ({ itemId: "a", index: 1, status: "queued" }) } as unknown as Response;
-  });
-
-  await listItems();
-
-  expect(urls.some((u) => u.includes("?ts="))).toBe(false);
-});
-```
-
-Если в файле нет готового мока `list` из `@vercel/blob`, повторить тот, что используют соседние тесты этого же файла.
-
-- [ ] **Step 2: Убедиться, что тест падает**
-
-Run: `npx vitest run tests/farm-store.test.ts`
-Expected: FAIL — первый тест не находит `?ts=` в запросах.
-
-- [ ] **Step 3: Реализовать**
-
-В `lib/farm/store.ts`:
-
-```ts
-async function readJson<T>(url: string, fresh = false): Promise<T | null> {
-  // Blob отдаёт запись до минуты после put. Проход, который читает и тут же
-  // пишет (будильник, тик заливки), из-за этого видит смесь старого и нового и
-  // делает двойную работу — так пересборка очереди 23.08.2026 сходилась за три
-  // вызова вместо одного. Читателям, которым минута неактуальности ничего не
-  // стоит, обход кэша не нужен: это запрос к источнику на каждый ролик.
-  const at = fresh ? `${url}${url.includes("?") ? "&" : "?"}ts=${Date.now()}` : url;
-  try {
-    return await fetchOnce<T>(at);
-  } catch (firstError) {
-    ...
-```
-
-Ниже сигнатуру `listItems` заменить на:
-
-```ts
-export async function listItems(opts?: { fresh?: boolean }): Promise<Item[]> {
-```
-
-и внутри воркера пробросить флаг в `readJson<Item>(blobs[mine].url, opts?.fresh)`.
-
-`loadItem` оставить как есть.
-
-- [ ] **Step 4: Убедиться, что тесты проходят**
-
-Run: `npx vitest run tests/farm-store.test.ts`
-Expected: PASS.
-
-- [ ] **Step 5: Коммит**
-
-```bash
-git add lib/farm/store.ts tests/farm-store.test.ts
-git commit -m "feat(farm): listItems умеет читать задачи мимо кэша Blob"
-```
+Наблюдаемая задержка — это собственная согласованность Vercel Blob: `list()` отдаёт ссылку,
+а содержимое по ней догоняет до минуты. Обходом кэша это не лечится. Единственная защита —
+идемпотентность пересборки, которая и без того заложена в Task 4.
 
 ---
 
@@ -823,7 +747,7 @@ git commit -m "feat(farm): regrid вместо rescheduleAfterPause — очер
 - Test: `tests/farm-sweep.test.ts`
 
 **Interfaces:**
-- Consumes: `regrid`, `queueOffGrid` (Task 4); `loadPace`, `paceSlotConfig` (Task 2); `isOnGrid` (Task 1); `listItems({ fresh })` (Task 3).
+- Consumes: `regrid`, `queueOffGrid` (Task 4); `loadPace`, `paceSlotConfig` (Task 2); `isOnGrid` (Task 1).
 - Produces: `SweepDeps` получает `loadPace: () => Promise<Pace | null>` и `onGrid: (iso: string) => boolean`; поле `loadCooldown` остаётся.
 
 - [ ] **Step 1: Написать падающие тесты**
@@ -961,7 +885,7 @@ import { normalizeSchedule, queueOffGrid, regrid, SlotChange } from "./schedule"
   }
 ```
 
-Остальная часть функции (расселение через `normalizeSchedule(scheduled, ...)`, `lastPerItem`, запись) не меняется. Строку чтения задач заменить на `const items = await deps.listItems();` — тип `listItems` в `SweepDeps` остаётся `() => Promise<Item[]>`, флаг ставит роут.
+Остальная часть функции (расселение через `normalizeSchedule(scheduled, ...)`, `lastPerItem`, запись) не меняется.
 
 В `app/api/farm/sweep/route.ts`:
 
@@ -977,9 +901,7 @@ import { isOnGrid, nextFreeSlot } from "../../../../lib/farm/slots";
     loadCooldown,
     loadPace: async () => pace,
     onGrid: (iso) => isOnGrid(iso, cfg),
-    // Будильник пишет сразу после чтения: стухшая запись здесь означает вторую
-    // пересборку той же очереди на следующем проходе.
-    listItems: () => listItems({ fresh: true }),
+    listItems,
     saveItem,
     nextFreeSlot: (taken, nowMs) => nextFreeSlot(taken, nowMs, cfg),
     ...
@@ -1400,7 +1322,7 @@ git commit -m "docs: сообщение о сбавленном темпе ид�
 | Окно и вывод числа в сутки | 1 |
 | Правила адаптации (блок / чистая серия / руками) | 2 (правила), 6 (блок и публикация), 7 (руками) |
 | Пересборка очереди | 4 (правило), 5 (применение) |
-| Чтение мимо кэша | 3 (механизм), 5 (использование) |
+| Согласованность Blob | 4 (идемпотентность пересборки) |
 | Что видит человек | 6 (сообщения), 7 (команды) |
 | Файлы | все задачи |
 | Тесты | все задачи |
@@ -1408,4 +1330,4 @@ git commit -m "docs: сообщение о сбавленном темпе ид�
 
 **Согласованность имён:** `slotsPerDay`, `isOnGrid` (Task 1) → `paceSlotConfig` (Task 2) → `regrid`, `queueOffGrid` (Task 4) → `SweepDeps.onGrid`, `SweepDeps.loadPace` (Task 5) → `PostDeps.loadPace`, `PostDeps.savePace` (Task 6) → `RHYTHM_PRESETS`, `parseRhythm` (Task 7). Расхождений нет.
 
-**Порядок:** Task 3 (store) идёт до Task 5 (sweep), который им пользуется. Task 4 временно ломает сборку `tests/farm-sweep.test.ts` — это отмечено в самой задаче и чинится Task 5.
+**Порядок:** Task 3 снята при выполнении (её посылка оказалась неверной). Task 4 временно ломает сборку `tests/farm-sweep.test.ts` — это отмечено в самой задаче и чинится Task 5.
