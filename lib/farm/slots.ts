@@ -1,5 +1,11 @@
 export interface SlotConfig {
   startHHMM: string;
+  /**
+   * Конец окна выпуска. Из него и зазора выводится число слотов в сутки: держать
+   * их двумя независимыми настройками значило позволить сетку, которая не
+   * совпадает сама с собой (см. slotsPerDay).
+   */
+  endHHMM: string;
   minutes: number;
   perDay: number;
   tz: string;
@@ -7,18 +13,24 @@ export interface SlotConfig {
 
 export const DEFAULT_SLOTS: SlotConfig = {
   startHHMM: "09:00",
+  endHHMM: "00:30",
   minutes: 45,
   perDay: 15,
   tz: "Asia/Jakarta",
 };
 
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
 export function slotConfigFromEnv(): SlotConfig {
   // Кривой HH:MM (без ведущего нуля, лишние символы и т.п.) уводит localToUtcMs
   // в Date.parse -> NaN, и назначение слота падает с RangeError вместо отката к дефолту.
   const rawStart = process.env.FARM_SLOT_START;
-  const startHHMM = rawStart && /^([01]\d|2[0-3]):[0-5]\d$/.test(rawStart) ? rawStart : DEFAULT_SLOTS.startHHMM;
+  const startHHMM = rawStart && HHMM.test(rawStart) ? rawStart : DEFAULT_SLOTS.startHHMM;
+  const rawEnd = process.env.FARM_SLOT_END;
+  const endHHMM = rawEnd && HHMM.test(rawEnd) ? rawEnd : DEFAULT_SLOTS.endHHMM;
   return {
     startHHMM,
+    endHHMM,
     minutes: Number(process.env.FARM_SLOT_MINUTES) || DEFAULT_SLOTS.minutes,
     perDay: Number(process.env.FARM_SLOTS_PER_DAY) || DEFAULT_SLOTS.perDay,
     tz: process.env.FARM_TZ || DEFAULT_SLOTS.tz,
@@ -59,6 +71,48 @@ function dayKey(tz: string, atUtcMs: number): string {
     month: "2-digit",
     day: "2-digit",
   }).format(new Date(atUtcMs));
+}
+
+function minutesOfDay(hhmm: string): number {
+  const [h, m] = hhmm.split(":").map(Number);
+  return h * 60 + m;
+}
+
+/**
+ * Сколько слотов помещается в окно при данном зазоре.
+ *
+ * Окно почти всегда переходит полночь (05:00 → 00:30), поэтому длину считаем по
+ * кругу суток, а не вычитанием: иначе вышло бы отрицательное число.
+ *
+ * Зазор — единственный руль темпа, и число в сутки обязано следовать за ним.
+ * Пока их держали двумя независимыми настройками, сменить одно, не пересчитав
+ * другое, значило получить сетку, которая не совпадает ни с чем.
+ */
+export function slotsPerDay(startHHMM: string, endHHMM: string, minutes: number): number {
+  if (!Number.isFinite(minutes) || minutes <= 0) return 1;
+  const span = (minutesOfDay(endHHMM) - minutesOfDay(startHHMM) + 1440) % 1440;
+  return Math.max(1, Math.floor(span / minutes) + 1);
+}
+
+/**
+ * Лежит ли время ровно на сетке. По этому и решается, пора ли пересобирать
+ * очередь: сменился темп — прежние слоты перестают ей принадлежать.
+ *
+ * Якорей два, потому что окно переходит полночь: слот в 00:30 — это последний
+ * слот вчерашней сетки, а не первый сегодняшней.
+ */
+export function isOnGrid(iso: string, cfg: SlotConfig): boolean {
+  const at = Date.parse(iso);
+  if (!Number.isFinite(at)) return false;
+  const step = cfg.minutes * 60_000;
+  if (step <= 0) return false;
+  for (const dayShift of [0, -86_400_000]) {
+    const key = dayKey(cfg.tz, at + dayShift);
+    const delta = at - localToUtcMs(cfg.tz, key, cfg.startHHMM);
+    if (delta < 0 || delta % step !== 0) continue;
+    if (delta / step < cfg.perDay) return true;
+  }
+  return false;
 }
 
 export function nextFreeSlot(

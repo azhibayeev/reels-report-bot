@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DEFAULT_SLOTS, nextFreeSlot, slotConfigFromEnv } from "../lib/farm/slots";
+import { DEFAULT_SLOTS, isOnGrid, nextFreeSlot, slotConfigFromEnv, slotsPerDay } from "../lib/farm/slots";
 
 // 19 августа 2026, 02:00 UTC = 09:00 в Джакарте (UTC+7).
 const AT_0900_JKT = Date.parse("2026-08-19T02:00:00.000Z");
@@ -34,7 +34,7 @@ describe("nextFreeSlot", () => {
   });
 });
 
-const ENV_KEYS = ["FARM_SLOT_START", "FARM_SLOT_MINUTES", "FARM_SLOTS_PER_DAY", "FARM_TZ"] as const;
+const ENV_KEYS = ["FARM_SLOT_START", "FARM_SLOT_END", "FARM_SLOT_MINUTES", "FARM_SLOTS_PER_DAY", "FARM_TZ"] as const;
 
 describe("slotConfigFromEnv", () => {
   const saved: Record<string, string | undefined> = {};
@@ -59,11 +59,13 @@ describe("slotConfigFromEnv", () => {
 
   it("читает полный набор переменных окружения", () => {
     process.env.FARM_SLOT_START = "07:30";
+    process.env.FARM_SLOT_END = "22:00";
     process.env.FARM_SLOT_MINUTES = "30";
     process.env.FARM_SLOTS_PER_DAY = "20";
     process.env.FARM_TZ = "Asia/Almaty";
     expect(slotConfigFromEnv()).toEqual({
       startHHMM: "07:30",
+      endHHMM: "22:00",
       minutes: 30,
       perDay: 20,
       tz: "Asia/Almaty",
@@ -76,5 +78,53 @@ describe("slotConfigFromEnv", () => {
       ...DEFAULT_SLOTS,
       startHHMM: "09:00",
     });
+  });
+});
+
+describe("slotsPerDay", () => {
+  it("выводит число слотов из окна и зазора", () => {
+    // 05:00–00:30 — это 1170 минут; сегодняшние 45 минут дают ровно 27 слотов,
+    // те самые, что стоят в проде.
+    expect(slotsPerDay("05:00", "00:30", 45)).toBe(27);
+    expect(slotsPerDay("05:00", "00:30", 180)).toBe(7);
+    expect(slotsPerDay("05:00", "00:30", 240)).toBe(5);
+  });
+
+  it("окно через полночь считает вперёд, а не назад", () => {
+    expect(slotsPerDay("22:00", "02:00", 60)).toBe(5);
+  });
+
+  it("вырожденное окно и мусорный зазор дают один слот, а не ноль и не NaN", () => {
+    expect(slotsPerDay("05:00", "05:00", 60)).toBe(1);
+    expect(slotsPerDay("05:00", "00:30", 0)).toBe(1);
+    expect(slotsPerDay("05:00", "00:30", Number.NaN)).toBe(1);
+  });
+});
+
+describe("isOnGrid", () => {
+  const cfg = { startHHMM: "05:00", endHHMM: "00:30", minutes: 180, perDay: 7, tz: "Asia/Jakarta" };
+
+  it("узнаёт слот своей сетки", () => {
+    expect(isOnGrid("2026-08-25T10:00:00.000Z", cfg)).toBe(true); // 17:00 по Джакарте
+  });
+
+  it("слот чужой сетки не признаёт", () => {
+    expect(isOnGrid("2026-08-25T10:15:00.000Z", cfg)).toBe(false); // 17:15, сетка 45 минут
+  });
+
+  it("слот за полночь принадлежит сетке ПРЕДЫДУЩЕГО дня", () => {
+    const cfg45 = { ...cfg, minutes: 45, perDay: 27 };
+    // 00:30 по Джакарте 26.08 — это 27-й слот сетки, начавшейся 25.08 в 05:00.
+    expect(isOnGrid("2026-08-25T17:30:00.000Z", cfg45)).toBe(true);
+  });
+
+  it("время за пределом числа слотов в сетку не входит", () => {
+    // 26.08, 02:00 по Джакарте — сетка 25.08 кончилась на 23:00, а сетка 26.08
+    // ещё не началась (её первый слот в 05:00).
+    expect(isOnGrid("2026-08-25T19:00:00.000Z", cfg)).toBe(false);
+  });
+
+  it("битую дату не признаёт, а не падает", () => {
+    expect(isOnGrid("не дата", cfg)).toBe(false);
   });
 });
