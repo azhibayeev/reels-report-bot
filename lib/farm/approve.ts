@@ -2,6 +2,7 @@ import { escapeHtml } from "../format";
 import { sendMessage } from "../telegram";
 import { formatSlot, parseCallback } from "./commands";
 import { MAX_CAPTION } from "./parse";
+import { Pace, paceSlotConfig } from "./pace";
 import { nextFreeSlot, slotConfigFromEnv } from "./slots";
 import { deleteBlobQuiet, listItems, loadItem, saveItem } from "./store";
 import {
@@ -39,10 +40,10 @@ export interface ApproveDeps {
   formatSlot: (iso: string) => string;
 }
 
-export function liveApproveDeps(rhythm?: { minutes: number; perDay: number } | null): ApproveDeps {
-  // Регулярность из состояния важнее переменных окружения: её меняют командой
-  // /rhythm без редеплоя, а env остаётся значением по умолчанию.
-  const cfg = { ...slotConfigFromEnv(), ...(rhythm ? { minutes: rhythm.minutes, perDay: rhythm.perDay } : {}) };
+export function liveApproveDeps(pace?: Pace | null): ApproveDeps {
+  // Темп из состояния важнее переменных окружения: его меняют без редеплоя —
+  // и командой /rhythm, и сама ферма после блока.
+  const cfg = paceSlotConfig(pace ?? null);
   return {
     now: () => Date.now(),
     loadItem,

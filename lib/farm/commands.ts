@@ -1,6 +1,7 @@
 import { escapeHtml } from "../format";
 import { isAbandoned } from "./tick";
 import { Cooldown, formatCooldown, isPaused } from "./cooldown";
+import { describePace, Pace } from "./pace";
 import { isRateBlock } from "./post";
 import { HookPosition, Item } from "./types";
 
@@ -52,24 +53,24 @@ export function parseStylePosition(text: string): HookPosition | "show" | null {
   return POSITION_SYNONYMS.get(arg) ?? null;
 }
 
-export type ParsedRhythm = { minutes: number; perDay: number } | "show" | null;
 
 /**
- * /rhythm — регулярность выпуска. Понимает пресет («плотно», «обычно»,
- * «спокойно») и пару чисел «интервал количество»: /rhythm 30 20.
+ * /rhythm — темп выпуска. Понимает пресет («плотно», «обычно», «спокойно») и
+ * одно число — зазор в минутах: /rhythm 180.
  */
-export function parseRhythm(text: string, presets: Record<string, { minutes: number; perDay: number }>): ParsedRhythm {
+export function parseRhythm(text: string, presets: Record<string, number>): number | "show" | null {
   const arg = text.trim().split(/\s+/).slice(1).join(" ").toLowerCase().trim();
   if (!arg) return "show";
 
   const preset = presets[arg];
   if (preset) return preset;
 
-  const numbers = arg.match(/\d+/g);
-  if (numbers && numbers.length === 2) {
-    return { minutes: Number(numbers[0]), perDay: Number(numbers[1]) };
-  }
-  return null;
+  // Ровно одно целое число. Прежняя форма «интервал количество» больше не
+  // принимается: число роликов в сутки выводится из окна, и взять из пары
+  // первое, промолчав про второе, значило бы сделать не то, что написал человек.
+  if (!/^\d+$/.test(arg)) return null;
+  const minutes = Number(arg);
+  return minutes > 0 ? minutes : null;
 }
 
 /**
@@ -163,7 +164,12 @@ function truncateError(error: string): string {
   return `${error.slice(0, MAX_ERROR_CHARS)}…`;
 }
 
-export function formatQueue(items: Item[], nowMs: number, cooldown: Cooldown | null = null): string {
+export function formatQueue(
+  items: Item[],
+  nowMs: number,
+  cooldown: Cooldown | null = null,
+  pace: Pace | null = null
+): string {
   if (items.length === 0) return "Ферма пуста: ни одного ролика ещё не загружено.";
 
   const review = items.filter((i) => i.status === "review");
@@ -186,6 +192,9 @@ export function formatQueue(items: Item[], nowMs: number, cooldown: Cooldown | n
   if (isPaused(cooldown, nowMs)) {
     lines.push(`⏸ Заливка на паузе — Instagram ограничил частоту. Ждём ${formatCooldown(cooldown!, nowMs)}.`);
   }
+  // Темп — рядом с паузой: «в очереди 19, ближайший в 17:00» без него не
+  // отвечает на главный вопрос — когда очередь вообще кончится.
+  if (pace) lines.push(`темп: ${describePace(pace)}`);
   lines.push(`ждут апрува: ${review.length}`);
   lines.push(`в очереди: ${queued.length}`);
   if (rendering.length > 0) lines.push(`собирается сейчас: ${rendering.length}`);

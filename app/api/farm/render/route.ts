@@ -9,7 +9,7 @@ import { after, NextRequest, NextResponse } from "next/server";
 import { deleteBlobQuiet, listItems, OUT_PREFIX, saveItem } from "../../../../lib/farm/store";
 import { queueRendered } from "../../../../lib/farm/queue";
 import { nextFreeSlot, slotConfigFromEnv } from "../../../../lib/farm/slots";
-import { loadRhythm } from "../../../../lib/farm/style";
+import { loadPace, paceSlotConfig } from "../../../../lib/farm/pace";
 import { formatSlot } from "../../../../lib/farm/commands";
 import { escapeHtml } from "../../../../lib/format";
 import { sendMessage } from "../../../../lib/telegram";
@@ -266,9 +266,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
-  // Регулярность из состояния важнее env: её меняют командой /rhythm без редеплоя.
-  const rhythm = await loadRhythm();
-  const slotCfg = { ...slotConfigFromEnv(), ...(rhythm ? { minutes: rhythm.minutes, perDay: rhythm.perDay } : {}) };
+  // Темп из состояния важнее env: его меняют без редеплоя — и командой /rhythm,
+  // и сама ферма после блока.
+  const slotCfg = paceSlotConfig(await loadPace());
 
   const deps = {
     now: () => Date.now(),

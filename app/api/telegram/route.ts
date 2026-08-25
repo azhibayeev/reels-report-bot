@@ -25,17 +25,20 @@ import {
 } from "../../../lib/farm/commands";
 import { listItems, saveItem } from "../../../lib/farm/store";
 import { loadCooldown } from "../../../lib/farm/cooldown";
-import { nextFreeSlot, slotConfigFromEnv } from "../../../lib/farm/slots";
+import { nextFreeSlot } from "../../../lib/farm/slots";
 import { queueRendered } from "../../../lib/farm/queue";
 import {
-  loadDefaultPosition,
-  loadRhythm,
-  MAX_PER_DAY,
+  CLEAN_RUN,
+  defaultPace,
+  describePace,
+  loadPace,
+  manualPace,
   MIN_SLOT_MINUTES,
+  paceSlotConfig,
   RHYTHM_PRESETS,
-  saveDefaultPosition,
-  saveRhythm,
-} from "../../../lib/farm/style";
+  savePace,
+} from "../../../lib/farm/pace";
+import { loadDefaultPosition, saveDefaultPosition } from "../../../lib/farm/style";
 import { answerCallback } from "../../../lib/farm/telegram";
 import { requireEnv, triggerRender } from "../../../lib/farm/tick";
 import { checkToken, exchangeForLongLived, fetchPageToken } from "../../../lib/farm/token";
@@ -56,6 +59,17 @@ import { sendDocument, sendMessage, SendOptions } from "../../../lib/telegram";
 import { resolveToken } from "../../../lib/token";
 import { loadTokenState } from "../../../lib/storage";
 import { Snapshot } from "../../../lib/types";
+
+// Когда именно крутили руль темпа — человеку в чате важнее ISO-строки.
+const formatWhen = (iso: string): string =>
+  new Intl.DateTimeFormat("ru-RU", {
+    timeZone: "Asia/Jakarta",
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(iso));
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -91,7 +105,7 @@ const HELP =
   "/batch — загрузить пачку роликов фермы (ссылка на 30 минут)\n" +
   "/reels — сводка по ферме: апрув, очередь, сбои\n" +
   "/style верх|центр|низ — дефолтная позиция хука для будущих пачек (без аргумента — показать текущую)\n" +
-  "/rhythm плотно|обычно|спокойно — регулярность выпуска (или своими числами: /rhythm 30 20)\n" +
+  "/rhythm плотно|обычно|спокойно — темп выпуска (или своим числом минут: /rhythm 180)\n" +
   "/retry [N] — вернуть в сборку сбойные ролики (по умолчанию 3)\n" +
   "/token — проверить ключи доступа Instagram: живы ли и хватает ли прав\n" +
   "/token set <ключ> — обменять временный ключ из Explorer на бессрочный и сохранить\n" +
@@ -224,7 +238,7 @@ async function handleFarmCommand(cmd: string, text: string, opts: SendOptions, r
       ? process.env.FARM_BASE_URL.replace(/\/+$/, "")
       : `https://${req.headers.get("x-forwarded-host") ?? req.nextUrl.host}`;
     await sendMessage(
-      `${formatQueue(items, Date.now(), await loadCooldown())}\n\n🗓 Что и когда запланировано:\n${base}/farm/plan/${planToken}`,
+      `${formatQueue(items, Date.now(), await loadCooldown(), await loadPace())}\n\n🗓 Что и когда запланировано:\n${base}/farm/plan/${planToken}`,
       opts
     );
     for (const batchId of batchesToKick(items, Date.now())) {
@@ -314,8 +328,7 @@ async function handleFarmCommand(cmd: string, text: string, opts: SendOptions, r
     const blocked = rateBlockedItems(items);
     let requeued = 0;
     if (blocked.length > 0) {
-      const rhythm = await loadRhythm();
-      const slotCfg = { ...slotConfigFromEnv(), ...(rhythm ? { minutes: rhythm.minutes, perDay: rhythm.perDay } : {}) };
+      const slotCfg = paceSlotConfig(await loadPace());
       const slotDeps = {
         now: () => Date.now(),
         listItems,
@@ -377,33 +390,39 @@ async function handleFarmCommand(cmd: string, text: string, opts: SendOptions, r
   }
   if (cmd === "/rhythm") {
     const parsed = parseRhythm(text, RHYTHM_PRESETS);
-    const current = (await loadRhythm()) ?? { minutes: 45, perDay: 15 };
+    const current = (await loadPace()) ?? defaultPace(Date.now());
     if (parsed === "show") {
-      const perDayHours = ((current.perDay - 1) * current.minutes) / 60;
+      const who = {
+        manual: "поставлено руками",
+        block: "сбавлено фермой после блока",
+        clean: "ускорено фермой за чистую серию",
+      }[current.reason];
       await sendMessage(
-        `Сейчас: каждые ${current.minutes} мин, ${current.perDay} роликов в день ` +
-          `(последний примерно через ${perDayHours.toFixed(1)} ч после первого).\n\n` +
-          `Пресеты: /rhythm плотно (30 мин, 20/день) · /rhythm обычно (45, 15) · /rhythm спокойно (90, 8)\n` +
-          `Или своими числами: /rhythm 30 20`,
+        `Сейчас: ${describePace(current)} — ${who} ${formatWhen(current.changedAt)}.\n` +
+          `До следующего ускорения роликов: ${Math.max(0, CLEAN_RUN - current.publishedSince)}.\n\n` +
+          `Пресеты: /rhythm плотно (2 ч) · /rhythm обычно (3 ч) · /rhythm спокойно (4 ч)\n` +
+          `Или своим числом минут: /rhythm 150`,
         opts
       );
       return true;
     }
-    if (!parsed) {
-      await sendMessage("Не понял. Например: /rhythm обычно или /rhythm 30 20", opts);
-      return true;
-    }
-    if (parsed.minutes < MIN_SLOT_MINUTES || parsed.perDay < 1 || parsed.perDay > MAX_PER_DAY) {
+    if (parsed === null) {
       await sendMessage(
-        `Интервал не меньше ${MIN_SLOT_MINUTES} минут, роликов в день от 1 до ${MAX_PER_DAY}.`,
+        "Не понял. Теперь одно число — зазор в минутах: /rhythm 180. " +
+          "Сколько роликов в сутки, бот считает сам из окна выпуска.",
         opts
       );
       return true;
     }
-    await saveRhythm(parsed);
+    if (parsed < MIN_SLOT_MINUTES) {
+      await sendMessage(`Зазор не меньше ${MIN_SLOT_MINUTES} минут.`, opts);
+      return true;
+    }
+    const next = manualPace(parsed, Date.now());
+    await savePace(next);
     await sendMessage(
-      `Регулярность: каждые ${parsed.minutes} мин, ${parsed.perDay} в день. ` +
-        `Уже назначенные слоты не двигаются — новое расписание применяется к тому, что одобрите дальше.`,
+      `Темп: ${describePace(next)}. ` +
+        `Очередь пересоберётся ближайшим проходом будильника — это до пяти минут.`,
       opts
     );
     return true;
@@ -526,7 +545,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
     try {
-      await handleCallback({ id: cb.id, data: cb.data ?? "", chatId: Number(cbChatId) }, liveApproveDeps(await loadRhythm()));
+      await handleCallback({ id: cb.id, data: cb.data ?? "", chatId: Number(cbChatId) }, liveApproveDeps(await loadPace()));
     } catch (e) {
       console.error("callback_query failed:", e);
       try {
@@ -551,7 +570,7 @@ export async function POST(req: NextRequest) {
           text: msg.text ?? "",
           replyToMessageId: msg.reply_to_message.message_id,
         },
-        liveApproveDeps(await loadRhythm())
+        liveApproveDeps(await loadPace())
       );
       if (handled) return NextResponse.json({ ok: true });
     } catch (e) {
