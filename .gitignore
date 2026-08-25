@@ -8,3 +8,23 @@ next-env.d.ts
 .superpowers/
 dubbed/
 dub-bot-state.json
+
+# Рабочие файлы вне кода бота — не публикуются
+.DS_Store
+*.xlsx
+*.csv
+*.pdf
+*.jsonl
+*.log
+halal-result.json
+reels-meta.json
+Qurany Ambassador Agreement*
+Сообщение*
+Оффер*
+План Захид*
+Rencana Zahid*
+jakarta-donors*
+jakarta-hotels*
+linkedin-*
+creatives-wakif*
+whatsapp-script-*
