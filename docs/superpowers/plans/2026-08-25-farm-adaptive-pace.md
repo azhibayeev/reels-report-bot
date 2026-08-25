@@ -10,6 +10,9 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-25-farm-adaptive-pace-design.md`
 
+**Статус:** выполнен 25.08.2026, задеплоен. Task 3 снята при выполнении — её посылка
+оказалась неверной (см. саму задачу).
+
 ## Global Constraints
 
 - Комментарии и сообщения в чат — по-русски, как во всём `lib/farm/`.
@@ -36,7 +39,7 @@
   - `slotsPerDay(startHHMM: string, endHHMM: string, minutes: number): number`
   - `isOnGrid(iso: string, cfg: SlotConfig): boolean`
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 Дописать в конец `tests/farm-slots.test.ts`:
 
@@ -92,12 +95,12 @@ describe("isOnGrid", () => {
 
 Импорты в шапке файла дополнить: `import { ..., isOnGrid, slotsPerDay } from "../lib/farm/slots";`
 
-- [ ] **Step 2: Убедиться, что тесты падают**
+- [x] **Step 2: Убедиться, что тесты падают**
 
 Run: `npx vitest run tests/farm-slots.test.ts`
 Expected: FAIL — `slotsPerDay is not a function`, `isOnGrid is not a function`.
 
-- [ ] **Step 3: Реализовать**
+- [x] **Step 3: Реализовать**
 
 В `lib/farm/slots.ts` в интерфейс добавить поле и расширить дефолт с чтением из env:
 
@@ -168,7 +171,7 @@ export function isOnGrid(iso: string, cfg: SlotConfig): boolean {
 }
 ```
 
-- [ ] **Step 4: Убедиться, что тесты проходят**
+- [x] **Step 4: Убедиться, что тесты проходят**
 
 Run: `npx vitest run tests/farm-slots.test.ts`
 Expected: PASS.
@@ -180,7 +183,7 @@ Expected: тесты зелёные; в `tsc` остаются только тр
 
 Если какой-то тест или файл собирает `SlotConfig` литералом без `endHHMM` — дописать туда `endHHMM: "00:30"`.
 
-- [ ] **Step 5: Коммит**
+- [x] **Step 5: Коммит**
 
 ```bash
 git add lib/farm/slots.ts tests/farm-slots.test.ts
@@ -210,7 +213,7 @@ git commit -m "feat(farm): окно выпуска явное, число сло
   - `describePace(pace: Pace): string`
   - `loadPace(): Promise<Pace | null>`, `savePace(pace: Pace): Promise<void>`
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 Создать `tests/farm-pace.test.ts`:
 
@@ -360,12 +363,12 @@ describe("defaultPace / manualPace", () => {
 });
 ```
 
-- [ ] **Step 2: Убедиться, что тесты падают**
+- [x] **Step 2: Убедиться, что тесты падают**
 
 Run: `npx vitest run tests/farm-pace.test.ts`
 Expected: FAIL — `Cannot find module '../lib/farm/pace'`.
 
-- [ ] **Step 3: Реализовать**
+- [x] **Step 3: Реализовать**
 
 Создать `lib/farm/pace.ts`:
 
@@ -543,12 +546,12 @@ export async function loadPace(): Promise<Pace | null> {
 }
 ```
 
-- [ ] **Step 4: Убедиться, что тесты проходят**
+- [x] **Step 4: Убедиться, что тесты проходят**
 
 Run: `npx vitest run tests/farm-pace.test.ts`
 Expected: PASS (все группы).
 
-- [ ] **Step 5: Коммит**
+- [x] **Step 5: Коммит**
 
 ```bash
 git add lib/farm/pace.ts tests/farm-pace.test.ts
@@ -582,7 +585,7 @@ git commit -m "feat(farm): темп заливки как состояние с 
   - `queueOffGrid(items: Item[], floorMs: number, paused: boolean, onGrid: (iso: string) => boolean): boolean`
   - `rescheduleAfterPause` **удаляется** — `regrid` её обобщает.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 В `tests/farm-schedule.test.ts` заменить блок `describe("rescheduleAfterPause", ...)` целиком на:
 
@@ -651,12 +654,12 @@ describe("queueOffGrid", () => {
 });
 ```
 
-- [ ] **Step 2: Убедиться, что тесты падают**
+- [x] **Step 2: Убедиться, что тесты падают**
 
 Run: `npx vitest run tests/farm-schedule.test.ts`
 Expected: FAIL — `regrid is not a function`, `queueOffGrid is not a function`.
 
-- [ ] **Step 3: Реализовать**
+- [x] **Step 3: Реализовать**
 
 В `lib/farm/schedule.ts` заменить `rescheduleAfterPause` на:
 
@@ -725,12 +728,12 @@ export function queueOffGrid(
 }
 ```
 
-- [ ] **Step 4: Убедиться, что тесты проходят**
+- [x] **Step 4: Убедиться, что тесты проходят**
 
 Run: `npx vitest run tests/farm-schedule.test.ts`
 Expected: PASS. Сборка `tests/farm-sweep.test.ts` временно сломается — её чинит Task 5.
 
-- [ ] **Step 5: Коммит**
+- [x] **Step 5: Коммит**
 
 ```bash
 git add lib/farm/schedule.ts tests/farm-schedule.test.ts
@@ -750,7 +753,7 @@ git commit -m "feat(farm): regrid вместо rescheduleAfterPause — очер
 - Consumes: `regrid`, `queueOffGrid` (Task 4); `loadPace`, `paceSlotConfig` (Task 2); `isOnGrid` (Task 1).
 - Produces: `SweepDeps` получает `loadPace: () => Promise<Pace | null>` и `onGrid: (iso: string) => boolean`; поле `loadCooldown` остаётся.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 В `tests/farm-sweep.test.ts` во все существующие вызовы `runSweep({...})` дописать две зависимости:
 
@@ -818,12 +821,12 @@ it("нечитаемый темп не срывает будильник", async
 });
 ```
 
-- [ ] **Step 2: Убедиться, что тесты падают**
+- [x] **Step 2: Убедиться, что тесты падают**
 
 Run: `npx vitest run tests/farm-sweep.test.ts`
 Expected: FAIL — `rescheduleAfterPause` больше нет, `onGrid` не используется.
 
-- [ ] **Step 3: Реализовать**
+- [x] **Step 3: Реализовать**
 
 В `lib/farm/sweep.ts` заменить импорт и блок пересборки:
 
@@ -909,12 +912,12 @@ import { isOnGrid, nextFreeSlot } from "../../../../lib/farm/slots";
 
 Прежние строки с `loadRhythm`/`slotConfigFromEnv` из роута убрать.
 
-- [ ] **Step 4: Убедиться, что тесты проходят**
+- [x] **Step 4: Убедиться, что тесты проходят**
 
 Run: `npx vitest run tests/farm-sweep.test.ts && npx tsc --noEmit`
 Expected: PASS; в `tsc` — только три давние ошибки в `tests/farm-cooldown.test.ts`.
 
-- [ ] **Step 5: Коммит**
+- [x] **Step 5: Коммит**
 
 ```bash
 git add lib/farm/sweep.ts app/api/farm/sweep/route.ts tests/farm-sweep.test.ts
@@ -933,7 +936,7 @@ git commit -m "feat(farm): будильник держит очередь на �
 - Consumes: `afterBlock`, `afterPublish`, `defaultPace`, `describePace`, `loadPace`, `savePace`, `Pace` (Task 2).
 - Produces: `PostDeps` получает `loadPace: () => Promise<Pace | null>` и `savePace: (pace: Pace) => Promise<void>`.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 В `tests/farm-cooldown.test.ts` в хелпер `makeDeps` добавить дефолты:
 
@@ -1004,12 +1007,12 @@ it("обычная публикация только считает, темп н
 });
 ```
 
-- [ ] **Step 2: Убедиться, что тесты падают**
+- [x] **Step 2: Убедиться, что тесты падают**
 
 Run: `npx vitest run tests/farm-cooldown.test.ts tests/farm-post.test.ts`
 Expected: FAIL — `savePace` не вызывается, в сообщениях нет «Сбавил темп».
 
-- [ ] **Step 3: Реализовать**
+- [x] **Step 3: Реализовать**
 
 В `lib/farm/post.ts` в `PostDeps` добавить:
 
@@ -1089,12 +1092,12 @@ Expected: FAIL — `savePace` не вызывается, в сообщениях
 
 Прежнюю строку с `loadRhythm()` из `livePostTickDeps` убрать.
 
-- [ ] **Step 4: Убедиться, что тесты проходят**
+- [x] **Step 4: Убедиться, что тесты проходят**
 
 Run: `npx vitest run tests/farm-cooldown.test.ts tests/farm-post.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Коммит**
+- [x] **Step 5: Коммит**
 
 ```bash
 git add lib/farm/post.ts tests/farm-cooldown.test.ts tests/farm-post.test.ts
@@ -1115,7 +1118,7 @@ git commit -m "feat(farm): блок сбавляет темп, чистая се
 - Consumes: всё из Task 2.
 - Produces: `parseRhythm(text: string, presets: Record<string, number>): number | "show" | null`; `RHYTHM_PRESETS: Record<string, number>` переезжает в `lib/farm/pace.ts`.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 Заменить содержимое `tests/farm-rhythm.test.ts` на:
 
@@ -1151,12 +1154,12 @@ describe("parseRhythm", () => {
 });
 ```
 
-- [ ] **Step 2: Убедиться, что тесты падают**
+- [x] **Step 2: Убедиться, что тесты падают**
 
 Run: `npx vitest run tests/farm-rhythm.test.ts`
 Expected: FAIL — `parseRhythm` возвращает объект, `RHYTHM_PRESETS` в `pace.ts` нет.
 
-- [ ] **Step 3: Реализовать**
+- [x] **Step 3: Реализовать**
 
 В `lib/farm/pace.ts` добавить:
 
@@ -1250,12 +1253,12 @@ const formatWhen = (iso: string): string =>
 
 Строку помощи (`/rhythm плотно|обычно|спокойно — ...`) поправить под одно число.
 
-- [ ] **Step 4: Убедиться, что тесты проходят**
+- [x] **Step 4: Убедиться, что тесты проходят**
 
 Run: `npx vitest run && npx tsc --noEmit`
 Expected: весь набор зелёный; в `tsc` — только три давние ошибки в `tests/farm-cooldown.test.ts`.
 
-- [ ] **Step 5: Коммит**
+- [x] **Step 5: Коммит**
 
 ```bash
 git add lib/farm/commands.ts lib/farm/pace.ts lib/farm/style.ts app/api/telegram/route.ts tests/farm-rhythm.test.ts
@@ -1269,11 +1272,11 @@ git commit -m "feat(farm): /rhythm одним числом, темп виден 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-08-25-farm-adaptive-pace-design.md` (сообщение о блоке — одно, а не два)
 
-- [ ] **Step 1: Поправить спеку под фактическое поведение**
+- [x] **Step 1: Поправить спеку под фактическое поведение**
 
 В разделе «Что видит человек» заменить отдельное сообщение о сбавленном темпе на строку, которая дописывается к сообщению о паузе — два уведомления подряд об одном событии это шум.
 
-- [ ] **Step 2: Задать окно в переменных Vercel**
+- [x] **Step 2: Задать окно в переменных Vercel**
 
 ```bash
 printf '00:30' | npx vercel env add FARM_SLOT_END production
@@ -1281,13 +1284,13 @@ printf '00:30' | npx vercel env add FARM_SLOT_END production
 
 Проверить, что `FARM_SLOT_START` уже равен `05:00` (значение помечено sensitive и не читается; сверяться по сетке слотов в `/reels`).
 
-- [ ] **Step 3: Деплой**
+- [x] **Step 3: Деплой**
 
 ```bash
 npx vercel --prod --yes
 ```
 
-- [ ] **Step 4: Записать стартовый темп**
+- [x] **Step 4: Записать стартовый темп**
 
 Без этого первый же проход возьмёт зазор из переменных окружения (45 минут) и вернёт аккаунт под блок. Одноразовым скриптом через `npx vite-node` записать `farm/state/pace.json`:
 
@@ -1295,7 +1298,7 @@ npx vercel --prod --yes
 { minutes: 180, changedAt: <сейчас>, publishedSince: 0, reason: "manual" }
 ```
 
-- [ ] **Step 5: Проверить, что правило согласно с уже пересобранной очередью**
+- [x] **Step 5: Проверить, что правило согласно с уже пересобранной очередью**
 
 ```bash
 curl -s -H "Authorization: Bearer $(cat .superpowers/cron-secret.txt)" https://qurany-eight.vercel.app/api/farm/sweep
@@ -1303,7 +1306,7 @@ curl -s -H "Authorization: Bearer $(cat .superpowers/cron-secret.txt)" https://q
 
 Expected: `{"kicked":[],"failed":[],"respaced":0}` — очередь, вручную пересобранная 25.08, сетке 180 минут уже соответствует, и правило её не двигает.
 
-- [ ] **Step 6: Коммит**
+- [x] **Step 6: Коммит**
 
 ```bash
 git add docs/superpowers/specs/2026-08-25-farm-adaptive-pace-design.md
