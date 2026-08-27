@@ -28,6 +28,9 @@ export const AMBASSADORS: Ambassador[] = [
   { slug: "zahid", label: "Захид" },
   { slug: "daristeppe", label: "@daristeppe" },
   { slug: "quranyapp", label: "@qurany_app" },
+  // Не человек, а канал: третье письмо DM-воронки по слову JOIN. Отдельной строкой,
+  // чтобы её установки не смешивались с обычным трафиком @daristeppe.
+  { slug: "join", label: "Воронка JOIN" },
 ];
 
 export function ambassadorLabel(slug: string): string {

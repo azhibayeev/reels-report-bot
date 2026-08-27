@@ -14,6 +14,25 @@ export function jakartaDateKey(d: Date): string {
   return dateKeyFmt.format(d); // en-CA => YYYY-MM-DD
 }
 
+/**
+ * День суточного спринта, в который попадает момент `d`. Сутки отчёта идут от 12:30
+ * Джакарты до 12:30 следующего дня и называются днём ЗАВЕРШЕНИЯ — тем же, каким
+ * помечен снапшот, снятый в 12:30. Сдвиг на 11:30 переносит момент в этот день:
+ * 25.08 20:00 → 26.08. Ровно тот же приём, что в HogQL у заходов (+690 минут), —
+ * иначе события и просмотры разъедутся по разным суткам.
+ */
+export function sprintDateKey(d: Date): string {
+  return jakartaDateKey(new Date(d.getTime() + 690 * 60_000));
+}
+
+/** Последние `count` дней Джакарты, заканчивая днём `now`, по возрастанию. */
+export function lastDayKeys(now: Date, count: number): string[] {
+  const out: string[] = [];
+  // Сутки Джакарты ровно по 24 часа (UTC+7 без перевода стрелок) — шаг не соскользнёт.
+  for (let i = count - 1; i >= 0; i--) out.push(jakartaDateKey(new Date(now.getTime() - i * 86_400_000)));
+  return out;
+}
+
 export async function saveSnapshot(key: string, snap: Snapshot, acc: AccountConfig): Promise<void> {
   await put(`${acc.snapshotPrefix}${key}.json`, JSON.stringify(snap), {
     access: "public",

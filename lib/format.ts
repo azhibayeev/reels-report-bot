@@ -3,7 +3,7 @@ import type { StoreClicks } from "./applink-store";
 import type { AdInsights } from "./meta";
 import type { LeadLevels } from "./leads";
 import type { ClicksStats } from "./posthog";
-import { FollowerChanges, FollowerStats, Report, Snapshot } from "./types";
+import { DayPoint, FollowerChanges, FollowerStats, FunnelSeries, Report, Snapshot } from "./types";
 
 const nf = new Intl.NumberFormat("ru-RU");
 
@@ -129,6 +129,26 @@ export function formatNowMessage(r: Report, account?: string): string {
     lines.push(followersLine(r.followers, "с 12:30 вчера"));
   }
   return lines.join("\n");
+}
+
+// Подпись к графику воронки. Картинку в Telegram смотрят с телефона, и мелкие цифры
+// на ней читаются плохо — поэтому последний день воронки дублируем текстом.
+// «—» вместо нуля значит «за этот день данных нет»: у уровня может не быть источника.
+function dayValue(series: DayPoint[], day: string): number | null {
+  const point = series.find((p) => p.date === day);
+  return point ? point.value : null;
+}
+
+export function formatFunnelCaption(account: string, day: string, s: FunnelSeries): string {
+  const n = (series: DayPoint[]): string => {
+    const v = dayValue(series, day);
+    return v === null ? "—" : `<b>${nf.format(v)}</b>`;
+  };
+  return (
+    `📈 <b>Воронка за 14 дней · ${escapeHtml(account)}</b>\n` +
+    `За сутки: вход ${n(s.published)} роликов → ${n(s.views)} просмотров → ` +
+    `выход ${n(s.joins)} заходов в сообщество · ${n(s.store)} переходов в стор`
+  );
 }
 
 // Сводка заходов по ссылкам. Метрика — уникальные люди. title/период задаёт вызывающий.

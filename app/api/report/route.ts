@@ -1,11 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AccountConfig, accountUserId, accountsToRun } from "../../../lib/accounts";
-import { buildTrendChart, chartSkipReason, computeDailyViewGains, renderChartPng } from "../../../lib/chart";
+import {
+  buildFunnelChart,
+  chartSkipReason,
+  computeDailyPublished,
+  computeDailyViewGains,
+  renderChartPng,
+} from "../../../lib/chart";
 import { computeReport } from "../../../lib/diff";
-import { loadStoreClicks } from "../../../lib/applink-store";
+import { loadDailyStoreClicks, loadStoreClicks } from "../../../lib/applink-store";
 import {
   escapeHtml,
   formatClicksMessage,
+  formatFunnelCaption,
   formatMessage,
   formatStoreClicksMessage,
   formatTargetMessage,
@@ -23,6 +30,7 @@ import {
 } from "../../../lib/instagram";
 import {
   jakartaDateKey,
+  lastDayKeys,
   loadLastReportKey,
   loadPreviousSnapshot,
   loadRecentSnapshots,
@@ -31,10 +39,22 @@ import {
 } from "../../../lib/storage";
 import { sendMessage, sendPhoto } from "../../../lib/telegram";
 import { resolveToken } from "../../../lib/token";
-import { Snapshot } from "../../../lib/types";
+import { FunnelSeries, Snapshot } from "../../../lib/types";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
+
+/** Ширина окна графика воронки в сутках. */
+const FUNNEL_DAYS = 14;
+
+/**
+ * Начало окна графика. Границу спринта берём от now−1ч, чтобы крон в 12:30 отсчитывал
+ * от ВЧЕРАШНЕЙ границы, а не от сегодняшней. Запас в целые сутки — чтобы при ручном
+ * прогоне посреди дня самый левый день оси всё равно попал в окно целиком.
+ */
+function funnelWindowStart(now: Date): Date {
+  return new Date(lastSprintStart(new Date(now.getTime() - 3600_000)).getTime() - FUNNEL_DAYS * 86_400_000);
+}
 
 interface AccountResult {
   account: string;
@@ -88,32 +108,37 @@ async function runAccountReport(acc: AccountConfig, now: Date): Promise<AccountR
   const report = computeReport(current, prev);
   await sendMessage(formatMessage(report, followerChanges, acc.label));
 
-  // График динамики (просмотры/день + заходы по ссылке этого аккаунта) за 14 дней.
-  // Изолирован: любая ошибка (QuickChart/PostHog/мало данных) не роняет отчёт.
+  // График воронки за 14 дней: вход (ролики) → середина (просмотры) → выход
+  // (заходы в сообщество + переходы в стор). Изолирован: любая ошибка
+  // (QuickChart/PostHog/Blob/мало данных) не роняет уже отправленный отчёт.
   let chart: string;
   try {
-    const snaps = await loadRecentSnapshots(15, acc); // 15 снапшотов → до 14 приростов
-    const viewsSeries = computeDailyViewGains(snaps).slice(-14);
-    const clicksSince = Math.floor((now.getTime() - 14 * 86_400_000) / 1000);
-    const clicksSeries = acc.clicksCondition ? await getDailyClicks(clicksSince, acc.clicksCondition) : [];
-    const skip = chartSkipReason(viewsSeries, clicksSeries);
+    const days = lastDayKeys(now, FUNNEL_DAYS);
+    const snaps = await loadRecentSnapshots(FUNNEL_DAYS + 1, acc); // N+1 снапшот → до N приростов
+    const series: FunnelSeries = {
+      // Свежий замер идёт в список отдельно: в Blob он уже лежит, но список мог быть
+      // прочитан до записи, а ролики сегодняшних суток есть только в нём.
+      published: computeDailyPublished([...snaps, current]),
+      views: computeDailyViewGains(snaps),
+      joins: acc.clicksCondition
+        ? await getDailyClicks(Math.floor(funnelWindowStart(now).getTime() / 1000), acc.clicksCondition)
+        : [],
+      store: acc.storeSlugs.length
+        ? await loadDailyStoreClicks(acc.storeSlugs, funnelWindowStart(now), now)
+        : [],
+    };
+    const skip = chartSkipReason(series);
     if (skip) {
       chart = `пропущен: ${skip}`;
     } else {
-      const png = await renderChartPng(
-        buildTrendChart(viewsSeries, clicksSeries, `Динамика за 14 дней · ${acc.label}`)
-      );
-      // Пока у аккаунта нет двух замеров, линии просмотров на графике не будет —
-      // говорим об этом прямо, иначе это читается как потерянные данные.
-      const note =
-        viewsSeries.length === 0
-          ? "\n<i>Просмотры за день появятся, когда наберётся два ежедневных замера.</i>"
-          : "";
-      await sendPhoto(png, `📈 Динамика за 14 дней · ${escapeHtml(acc.label)}${note}`);
-      chart = `отправлен (просмотры: ${viewsSeries.length} дн., заходы: ${clicksSeries.length} дн.)`;
+      const png = await renderChartPng(buildFunnelChart(days, series, `Воронка за 14 дней · ${acc.label}`));
+      await sendPhoto(png, formatFunnelCaption(acc.label, days[days.length - 1], series));
+      chart =
+        `отправлен (ролики: ${series.published.length} дн., просмотры: ${series.views.length} дн., ` +
+        `заходы: ${series.joins.length} дн., переходы в стор: ${series.store.length} дн.)`;
     }
   } catch (e) {
-    console.error(`trend chart failed (${acc.key}):`, e);
+    console.error(`funnel chart failed (${acc.key}):`, e);
     chart = `ошибка: ${e instanceof Error ? e.message : String(e)}`;
   }
 

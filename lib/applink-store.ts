@@ -7,7 +7,8 @@
 
 import { list, put } from "@vercel/blob";
 import { AMBASSADORS, Platform } from "./applink";
-import { jakartaDateKey } from "./storage";
+import { jakartaDateKey, sprintDateKey } from "./storage";
+import { DayPoint } from "./types";
 
 const PREFIX = "applink/";
 
@@ -122,4 +123,45 @@ export async function loadStoreClicks(from: Date, to: Date): Promise<StoreClicks
 
   // Сортировка по переходам в стор: компьютерные заходы никого наверх не поднимают.
   return rows.sort((a, b) => b.android + b.ios - (a.android + a.ios));
+}
+
+/** Суточные спринты, попадающие в окно: по ним раскладываем переходы на графике. */
+function sprintDaysOfWindow(from: Date, to: Date): string[] {
+  const days = new Set<string>();
+  for (let t = from.getTime(); t < to.getTime(); t += 86_400_000) days.add(sprintDateKey(new Date(t)));
+  return [...days].sort();
+}
+
+/**
+ * Выход воронки по дням: переходы в стор с коротких ссылок `slugs` за окно [from, to).
+ * Считаем только android+ios — с компьютера человек попадает на страницу выбора, и в
+ * стор его никто не увёл. Дни разложены по суточным спринтам 12:30→12:30, как просмотры.
+ *
+ * Дни без единого перехода возвращаются нулями: разрыв в линии читался бы как «не
+ * мерили», хотя мерили и не было ничего. Календарные папки Blob только сужают поиск —
+ * попадание в окно решает метка времени из имени файла.
+ */
+export async function loadDailyStoreClicks(slugs: string[], from: Date, to: Date): Promise<DayPoint[]> {
+  const counts = new Map<string, number>(sprintDaysOfWindow(from, to).map((d) => [d, 0]));
+  const fromMs = from.getTime();
+  const toMs = to.getTime();
+
+  await Promise.all(
+    slugs.flatMap((slug) =>
+      jakartaDaysOfWindow(from, to).map(async (day) => {
+        const prefix = `${PREFIX}${slug}/${day}/`;
+        for (const path of await listAllPaths(prefix)) {
+          // Имя файла: <платформа>-<мс>-<случайный хвост>.json
+          const [platform, ms] = path.slice(prefix.length).split("-");
+          if (platform !== "android" && platform !== "ios") continue;
+          const at = Number(ms);
+          if (!Number.isFinite(at) || at < fromMs || at >= toMs) continue;
+          const key = sprintDateKey(new Date(at));
+          counts.set(key, (counts.get(key) ?? 0) + 1);
+        }
+      })
+    )
+  );
+
+  return [...counts.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([date, value]) => ({ date, value }));
 }

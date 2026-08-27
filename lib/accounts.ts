@@ -28,6 +28,11 @@ export interface AccountConfig {
    * заходов на графике. null — линии нет (аккаунт не размечен в PostHog).
    */
   clicksCondition: string | null;
+  /**
+   * Короткие ссылки /go/<слаг>, по которым зрители этого аккаунта уходят в стор, —
+   * нижний этаж воронки на графике. Пусто — линии переходов нет.
+   */
+  storeSlugs: string[];
 }
 
 export const DARISTEPPE: AccountConfig = {
@@ -43,6 +48,9 @@ export const DARISTEPPE: AccountConfig = {
   historyTabEnv: "SHEETS_HISTORY_TAB",
   historyTabDefault: "History",
   clicksCondition: "properties.utm_content = 'daristeppe'",
+  // join — то же самое: третье письмо DM-воронки по слову JOIN ведёт в стор
+  // зрителей роликов @daristeppe, и в воронке аккаунта им место.
+  storeSlugs: ["daristeppe", "join"],
 };
 
 export const QURANY_APP: AccountConfig = {
@@ -61,6 +69,7 @@ export const QURANY_APP: AccountConfig = {
   historyTabDefault: "History qurany_app",
   // Старая метка link_in_bio — тот же аккаунт до переразметки ссылки.
   clicksCondition: "properties.utm_content IN ('qurany_app','link_in_bio')",
+  storeSlugs: ["quranyapp"],
 };
 
 export const ACCOUNTS: AccountConfig[] = [DARISTEPPE, QURANY_APP];
