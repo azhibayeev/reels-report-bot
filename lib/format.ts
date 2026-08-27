@@ -50,11 +50,24 @@ function withAccount(title: string, account?: string): string {
   return account ? `${title} · ${escapeHtml(account)}` : title;
 }
 
+/**
+ * Длина окна отчёта. Печатаем всегда, а не только при отклонении от суток: число,
+ * которое появляется иногда, читается как сообщение об ошибке. Ручной прогон даёт
+ * окно короче суток — и «прирост ниже на 6%» перестаёт выглядеть провалом контента.
+ */
+function windowHours(startIso: string, endIso: string): string {
+  const hours = (Date.parse(endIso) - Date.parse(startIso)) / 3_600_000;
+  return `${hours.toFixed(1).replace(".", ",")} ч`;
+}
+
 export function formatMessage(r: Report, changes?: FollowerChanges | null, account?: string): string {
   const lines: string[] = [];
   lines.push(`📊 <b>${withAccount("Отчёт по рилсам", account)}</b>`);
   if (r.periodStart) {
-    lines.push(`Период: с ${fmtDateTime(r.periodStart)} по ${fmtDateTime(r.periodEnd)} (время Джакарты)`);
+    lines.push(
+      `Период: с ${fmtDateTime(r.periodStart)} по ${fmtDateTime(r.periodEnd)} ` +
+        `(окно ${windowHours(r.periodStart, r.periodEnd)} · время Джакарты)`
+    );
   } else {
     lines.push(`Первый замер: ${fmtDateTime(r.periodEnd)} (время Джакарты)`);
   }
@@ -68,9 +81,9 @@ export function formatMessage(r: Report, changes?: FollowerChanges | null, accou
   } else {
     const newGain = r.newReels.reduce((s, reel) => s + reel.gain, 0);
     lines.push(`🆕 Новых рилсов за период: <b>${r.newReels.length}</b>`);
-    lines.push(`⚡️ Новые рилсы набрали за эти 24 часа: <b>${nf.format(newGain)}</b> просмотров`);
+    lines.push(`⚡️ Новые рилсы набрали за период: <b>${nf.format(newGain)}</b> просмотров`);
     lines.push("");
-    lines.push(`▶️ Прирост ТОТАЛ просмотров за последние 24 часа: <b>${signed(r.totalGain)}</b>`);
+    lines.push(`▶️ Прирост ТОТАЛ просмотров за период: <b>${signed(r.totalGain)}</b>`);
     lines.push(`👁 ТОТАЛ просмотров по ${nf.format(r.all.length)} рилсам: <b>${nf.format(r.totalViews)}</b>`);
   }
 
@@ -164,10 +177,14 @@ export function formatClicksMessage(s: ClicksStats, title: string): string {
     s.sources
       .filter((x) => x.category === cat && x.uniq > 0)
       .sort((a, b) => b.uniq - a.uniq)
-      .map((x) => `${escapeHtml(x.name)} — <b>${nf.format(x.uniq)}</b>`)
+      // Тот же человек в соседнем сообщении назван подписью, а не меткой utm:
+      // «bara» и «Бара» рядом читаются как два разных источника.
+      .map((x) => `${escapeHtml(ambassadorLabel(x.name))} — <b>${nf.format(x.uniq)}</b>`)
       .join(" · ");
 
-  const lines: string[] = [`📊 <b>${title}</b>`, period, ""];
+  // Метрика в заголовке: рядом стоит блок переходов в стор, и 12 уникальных людей
+  // против 11 кликов иначе читаются как расхождение в данных.
+  const lines: string[] = [`📊 <b>${title}</b> <i>(уникальные люди)</i>`, period, ""];
 
   const bio = inline("bio");
   const inf = inline("inf");
@@ -188,7 +205,7 @@ export function formatClicksMessage(s: ClicksStats, title: string): string {
 // а установки всё равно считают консоли Play и App Store, только сутками позже.
 export function formatStoreClicksMessage(rows: StoreClicks[], title: string, from: Date, to: Date): string {
   const period = `С ${fmtDateTime(from.toISOString())} по ${fmtDateTime(to.toISOString())} (Джакарта)`;
-  const lines: string[] = [`📲 <b>${escapeHtml(title)}</b>`, period, ""];
+  const lines: string[] = [`📲 <b>${escapeHtml(title)}</b> <i>(клики по ссылке)</i>`, period, ""];
 
   const store = (r: StoreClicks): number => r.android + r.ios;
   const total = rows.reduce((s, r) => s + store(r), 0);
@@ -223,20 +240,40 @@ export function formatStoreClicksMessage(rows: StoreClicks[], title: string, fro
   return lines.join("\n");
 }
 
+/**
+ * Даты рекламного окна так, как их вернул сам кабинет (`date_start`/`date_stop`
+ * в формате YYYY-MM-DD). Окно рекламы календарное и не совпадает со спринтом
+ * 12:30→12:30 у остальных блоков — поэтому его называем датой, а не «вчера».
+ * null — открутки не было, дат кабинет не прислал.
+ */
+function adsWindowLabel(ads: AdInsights): string | null {
+  const day = (iso: string): string => {
+    const [y, m, d] = iso.split("-");
+    return `${d}.${m}.${y}`;
+  };
+  if (!ads.periodStart || !ads.periodEnd) return null;
+  return ads.periodStart === ads.periodEnd
+    ? day(ads.periodStart)
+    : `${day(ads.periodStart)} — ${day(ads.periodEnd)}`;
+}
+
 // Сводка по таргету: рекламные метрики + разбивка лидов по уровню инвестора.
-// periodLabel задаёт вызывающий (напр. «за вчерашние сутки» / «за всё время»).
+// leadsLabel задаёт вызывающий (напр. «с 12:30 вчера» / «за всё время»): окно лидов
+// живёт по спринту отчёта, а окно рекламы приходит из кабинета вместе с цифрами.
 // levels = null — база лидов квиза не подключена. Рекламную часть это не отменяет:
 // цифры Meta приходят своим путём, и терять их из-за отсутствующей разбивки нельзя.
 export function formatTargetMessage(
   ads: AdInsights,
   levels: LeadLevels | null,
   title: string,
-  periodLabel: string
+  leadsLabel: string
 ): string {
-  const lines: string[] = [`🎯 <b>Таргет · ${escapeHtml(title)}</b>`, periodLabel, ""];
+  const adsWindow = adsWindowLabel(ads) ?? escapeHtml(title);
+  const period = `🗓 Реклама — ${escapeHtml(adsWindow)} · лиды — ${escapeHtml(leadsLabel)}`;
+  const lines: string[] = [`🎯 <b>Таргет · ${escapeHtml(title)}</b>`, period, ""];
 
   lines.push(`💵 Потрачено: <b>${fmtMoney(ads.spend, ads.currency)}</b>`);
-  lines.push(`🧲 Лидов (результатов): <b>${nf.format(ads.leads)}</b>`);
+  lines.push(`🧲 Лидов (результатов Meta): <b>${nf.format(ads.leads)}</b>`);
   lines.push(
     `💲 Цена за результат: <b>${ads.costPerResult == null ? "—" : fmtMoney(ads.costPerResult, ads.currency)}</b>`
   );

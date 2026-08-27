@@ -222,7 +222,7 @@ export function buildFunnelChart(
         title: { display: true, text: title, font: { size: 18 } },
         subtitle: {
           display: true,
-          text: "Вход → ролики · Середина → просмотры · Выход → сообщество и установки",
+          text: "Вход → ролики · Середина → просмотры · Выход → заходы по ссылке и переходы в стор",
           color: "#6b7280",
           font: { size: 12 },
           padding: { bottom: 10 },

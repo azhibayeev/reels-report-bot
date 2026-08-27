@@ -268,7 +268,7 @@ export async function GET(req: NextRequest) {
         const sprintStart = lastSprintStart(new Date(now.getTime() - 3600_000));
         const levels = await getLeadLevels(sprintStart.toISOString());
         await sendMessage(
-          formatTargetMessage(ads, levels, "за сутки", "🗓 Реклама — вчерашние сутки · лиды — с 12:30 вчера")
+          formatTargetMessage(ads, levels, "за сутки", "с 12:30 вчера")
         );
       } catch (e) {
         console.error("target report failed:", e);

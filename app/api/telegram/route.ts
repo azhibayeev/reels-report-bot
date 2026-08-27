@@ -168,7 +168,7 @@ async function handleReportCommand(cmd: string, opts: SendOptions): Promise<void
     const ads = await getAdInsights("yesterday");
     const levels = await getLeadLevels(lastSprintStart().toISOString());
     await sendMessage(
-      formatTargetMessage(ads, levels, "за сутки", "🗓 Реклама — вчерашние сутки · лиды — с 12:30 вчера"),
+      formatTargetMessage(ads, levels, "за сутки", "с 12:30 вчера"),
       opts
     );
     return;
@@ -176,7 +176,7 @@ async function handleReportCommand(cmd: string, opts: SendOptions): Promise<void
   if (cmd === "/targettotal") {
     const ads = await getAdInsights("maximum");
     const levels = await getLeadLevels(null);
-    await sendMessage(formatTargetMessage(ads, levels, "за всё время", "За всё время"), opts);
+    await sendMessage(formatTargetMessage(ads, levels, "за всё время", "за всё время"), opts);
     return;
   }
   // Пары команд: базовая — по @daristeppe, с суффиксом app — по @qurany_app.

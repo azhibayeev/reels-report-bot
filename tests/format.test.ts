@@ -25,12 +25,17 @@ describe("formatMessage", () => {
     expect(msg).toContain("Отчёт по рилсам");
     expect(msg).toContain("Период: с");
     expect(msg).toContain("время Джакарты");
+    // Длина окна стоит в шапке всегда: цифра, появляющаяся лишь иногда, читается
+    // как сообщение об ошибке, а не как параметр отчёта.
+    expect(msg).toContain("окно 24,0 ч");
     expect(msg).toContain("Новых рилсов за период: <b>1</b>");
     // new reel n gained 900 (all its views)
-    expect(msg).toContain("Новые рилсы набрали за эти 24 часа");
+    // Не «за 24 часа»: ручной прогон посреди дня даёт окно короче суток,
+    // а текст утверждал бы ровно сутки.
+    expect(msg).toContain("Новые рилсы набрали за период");
     expect(msg).toContain("<b>900</b> просмотров");
     // total gain = 80 (a) + 900 (n) = 980; total views = 180 + 900 = 1080
-    expect(msg).toContain("Прирост ТОТАЛ просмотров за последние 24 часа: <b>+980</b>");
+    expect(msg).toContain("Прирост ТОТАЛ просмотров за период: <b>+980</b>");
     expect(msg).toContain("ТОТАЛ просмотров по 2 рилсам");
     expect(msg).toContain(`<b>${new Intl.NumberFormat("ru-RU").format(1080)}</b>`);
     // no per-reel links in the message — they live in the CSV table

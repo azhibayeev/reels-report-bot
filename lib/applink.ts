@@ -33,8 +33,19 @@ export const AMBASSADORS: Ambassador[] = [
   { slug: "join", label: "Воронка JOIN" },
 ];
 
+/**
+ * Подпись для слага. Сравниваем по «скелету» имени (без регистра, без `_` и `-`):
+ * один и тот же человек приходит из разных систем по-разному — в PostHog метка
+ * `qurany_app`, а слаг короткой ссылки `quranyapp`, — и в соседних сообщениях отчёта
+ * он не должен называться двумя способами. Чужое имя (не слаг) возвращаем как есть.
+ */
 export function ambassadorLabel(slug: string): string {
-  return AMBASSADORS.find((a) => a.slug === slug)?.label ?? slug;
+  const key = nameKey(slug);
+  return AMBASSADORS.find((a) => nameKey(a.slug) === key)?.label ?? slug;
+}
+
+function nameKey(s: string): string {
+  return s.toLowerCase().replace(/[_-]/g, "");
 }
 
 export function detectPlatform(userAgent: string | null | undefined): Platform {

@@ -36,15 +36,19 @@ describe("lead breakdown is optional", () => {
   });
 
   it("still reports the ad numbers when there is no lead breakdown", () => {
-    const msg = formatTargetMessage(ADS, null, "за сутки", "🗓 вчера");
+    const msg = formatTargetMessage(ADS, null, "за сутки", "с 12:30 вчера");
     expect(msg).toContain("Потрачено");
-    expect(msg).toContain("Лидов (результатов)");
+    // «Meta» в скобках разводит два разных лида в одном сообщении:
+    // результат рекламного кабинета и заявку в базе квиза.
+    expect(msg).toContain("Лидов (результатов Meta)");
+    // Окно рекламы календарное и своё — берём его из ответа кабинета, а не из подписи.
+    expect(msg).toContain("🗓 Реклама — 19.08.2026 · лиды — с 12:30 вчера");
     expect(msg).toContain("Разбивка по лидам не настроена");
     expect(msg).not.toContain("Высокий");
   });
 
   it("keeps the breakdown when the source is configured", () => {
-    const msg = formatTargetMessage(ADS, { high: 2, medium: 3, low: 4, total: 9, sinceIso: null }, "за сутки", "🗓 вчера");
+    const msg = formatTargetMessage(ADS, { high: 2, medium: 3, low: 4, total: 9, sinceIso: null }, "за сутки", "с 12:30 вчера");
     expect(msg).toContain("Высокий");
     expect(msg).toContain("Σ Всего лидов");
   });
