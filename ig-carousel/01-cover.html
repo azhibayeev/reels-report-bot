@@ -1,0 +1,41 @@
+<!doctype html><html><head><meta charset='utf-8'><style>
+@font-face { font-family:'Mont'; src:local('Montserrat Bold'),
+  url('file:///Users/alanalmassuly/Library/Fonts/Montserrat-Bold.ttf'); font-weight:700; font-style:normal; }
+@font-face { font-family:'Mont'; src:local('Montserrat Medium'),
+  url('file:///Users/alanalmassuly/Library/Fonts/Montserrat-Medium.ttf'); font-weight:500; font-style:normal; }
+
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:1080px; height:1350px; }
+body { background:#FFF; font-family:'Mont'; overflow:hidden;
+  -webkit-font-smoothing:antialiased; text-rendering:geometricPrecision; }
+.canvas { position:relative; width:1080px; height:1350px; background:#FFF; }
+
+/* --- cover ---------------------------------------------------------- */
+.cover-logo { position:absolute; top:150px; left:493px; width:95px; height:104px; }
+.headline { position:absolute; top:308px; left:110px; width:860px; text-align:center;
+  font-weight:700; font-size:56px; line-height:70px; letter-spacing:-1px; color:#065B3C; }
+
+/* --- feature slides ------------------------------------------------- */
+.mark { position:absolute; top:110px; left:110px; width:51px; height:56px; }
+.copy { position:absolute; top:232px; left:110px; width:860px; height:292px;
+  display:flex; align-items:center; }
+.copy > span { display:block; width:100%;
+  font-weight:700; font-size:46px; line-height:60px; letter-spacing:-0.7px;
+  color:#1A1A1A; text-indent:-50px; padding-left:50px; }
+.copy .arw { color:#065B3C; }
+.copy em { font-style:normal; color:#065B3C; }
+.art { position:absolute; left:0; top:0; width:1080px; height:1350px; }
+
+/* --- phone mockup --------------------------------------------------- */
+.phone { position:absolute; left:378.7px; top:539px; width:323px; height:681px;
+  background:#1A1A1A; border-radius:44px; padding:9px; transform:rotate(-6deg);
+  box-shadow: 0 6px 14px rgba(26,26,26,.10), 0 22px 40px rgba(26,26,26,.13),
+              0 36px 74px rgba(6,91,60,.10); }
+.phone .screen { width:305px; height:663px; border-radius:36px; overflow:hidden;
+  background:#F2F2F4; }
+.phone .screen img { display:block; width:305px; height:663px; }
+</style></head><body><div class='canvas'>
+      <img class="cover-logo" src="file:///Users/alanalmassuly/Desktop/qurany/presentation/assets/qurany-logo-mark.png">
+      <div class="headline">Qurany &#8212; aplikasi untuk<br>membaca Al-Qur&#39;an.</div>
+      <div class="phone"><div class="screen"><img src="file:///Users/alanalmassuly/Desktop/qurany/presentation/assets/qurany-app-home.jpg"></div></div>
+    </div></body></html>
