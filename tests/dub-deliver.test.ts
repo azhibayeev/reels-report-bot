@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ageSec, dubbedName, JOB_DEADLINE_MS, PollDeps, pollJobs } from "../lib/dub/deliver";
+import { ageSec, dubbedName, JOB_DEADLINE_MS, PollDeps, pollJobs, SWEEP_MINUTE } from "../lib/dub/deliver";
 import { DubJob, isDeliveryStuck, DELIVERY_TAKEOVER_MS } from "../lib/dub/jobs";
 import { UPLOAD_LIMIT } from "../lib/dub/telegram";
 
@@ -16,7 +16,18 @@ const base: DubJob = {
 };
 
 function deps(jobs: DubJob[], over: Partial<PollDeps> = {}): PollDeps & { calls: Record<string, unknown[][]> } {
-  const calls: Record<string, unknown[][]> = { save: [], del: [], video: [], audio: [], edit: [], delMsg: [] };
+  const calls: Record<string, unknown[][]> = {
+    save: [],
+    del: [],
+    video: [],
+    audio: [],
+    edit: [],
+    delMsg: [],
+    delBlob: [],
+    put: [],
+    sweep: [],
+    burn: [],
+  };
   const d = {
     listJobs: async () => jobs,
     saveJob: async (j: DubJob) => void calls.save.push([j]),
@@ -27,6 +38,19 @@ function deps(jobs: DubJob[], over: Partial<PollDeps> = {}): PollDeps & { calls:
     sendAudio: async (...a: unknown[]) => void calls.audio.push(a),
     editMessage: async (...a: unknown[]) => void calls.edit.push(a),
     deleteMessage: async (...a: unknown[]) => void calls.delMsg.push(a),
+    deleteBlob: async (url?: string) => void calls.delBlob.push([url]),
+    putResult: async (pathname: string, video: Buffer, contentType: string) => {
+      calls.put.push([pathname, video.length, contentType]);
+      return "https://blob.example/dub/out/77-5-reels-id.mp4";
+    },
+    sweep: async (keep: Set<string>, nowMs: number) => {
+      calls.sweep.push([[...keep], nowMs]);
+      return 0;
+    },
+    burnSubtitles: async (video: Buffer, dubbingId: string) => {
+      calls.burn.push([video.length, dubbingId]);
+      return Buffer.alloc(video.length + 7); // «вжатый» ролик отличим по размеру
+    },
     ...over,
   } as PollDeps;
   return Object.assign(d, { calls });
@@ -90,13 +114,91 @@ describe("pollJobs", () => {
     expect((await pollJobs(d, NOW)).delivered).toBe(1);
   });
 
-  it("результат тяжелее 50 МБ не шлёт, а объясняет — Telegram его всё равно не примет", async () => {
+  it("результат тяжелее 50 МБ уходит ссылкой: Telegram его не примет, но и терять готовое незачем", async () => {
     const d = deps([base], { download: async () => Buffer.alloc(UPLOAD_LIMIT + 1) });
     const res = await pollJobs(d, NOW);
     expect(res.delivered).toBe(1);
     expect(d.calls.video).toHaveLength(0);
+    expect(d.calls.put[0][0]).toBe("dub/out/77-5-reels-id.mp4");
     expect(String(d.calls.edit[0][2])).toContain("50 МБ");
+    expect(String(d.calls.edit[0][2])).toContain("https://blob.example/");
     expect(d.calls.del[0]).toEqual(["77-5"]);
+  });
+
+  it("исходник из страницы загрузки удаляется вместе с задачей — иначе он лежит в Blob вечно", async () => {
+    const uploaded = { ...base, blobUrl: "https://blob.example/dub/sources/77-5-reels.mp4" };
+    const ok = deps([uploaded]);
+    await pollJobs(ok, NOW);
+    expect(ok.calls.delBlob[0]).toEqual(["https://blob.example/dub/sources/77-5-reels.mp4"]);
+
+    const broken = deps([uploaded], {
+      getStatus: async () => ({ status: "failed", error: "no speech", contentType: null }),
+    });
+    await pollJobs(broken, NOW);
+    expect(broken.calls.delBlob[0]).toEqual(["https://blob.example/dub/sources/77-5-reels.mp4"]);
+  });
+
+  it("уборка Blob идёт раз в час и щадит файлы живых задач", async () => {
+    const hour = Date.parse("2026-08-24T10:00:00.000Z");
+    const live = { ...base, blobUrl: "https://blob.example/dub/sources/live.mp4" };
+
+    const quiet = deps([live], { getStatus: async () => ({ status: "dubbing", error: null, contentType: null }) });
+    await pollJobs(quiet, hour + (SWEEP_MINUTE + 1) * 60_000);
+    expect(quiet.calls.sweep).toHaveLength(0);
+
+    const sweeping = deps([live], { getStatus: async () => ({ status: "dubbing", error: null, contentType: null }) });
+    await pollJobs(sweeping, hour + SWEEP_MINUTE * 60_000);
+    expect(sweeping.calls.sweep[0][0]).toEqual(["https://blob.example/dub/sources/live.mp4"]);
+  });
+
+  it("упавшая уборка не роняет проход: доставка важнее чистоты хранилища", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const d = deps([base], {
+      sweep: async () => {
+        throw new Error("Blob 500");
+      },
+    });
+    const res = await pollJobs(d, Date.parse("2026-08-24T10:07:00.000Z"));
+    expect(res.delivered).toBe(1);
+    spy.mockRestore();
+  });
+
+  it("на «с субтитрами» уходит вжатый ролик, а не исходный дубляж", async () => {
+    const d = deps([{ ...base, subtitles: true }]);
+    await pollJobs(d, NOW);
+    expect(d.calls.burn[0]).toEqual([1024, "dub_1"]);
+    expect((d.calls.video[0][1] as Buffer).length).toBe(1031);
+    expect(String(d.calls.edit[0][2])).toBe("Вжигаю субтитры…");
+    expect(String(d.calls.video[0][3])).not.toContain("не легли");
+  });
+
+  it("без просьбы субтитры не трогаем", async () => {
+    const d = deps([base]);
+    await pollJobs(d, NOW);
+    expect(d.calls.burn).toHaveLength(0);
+  });
+
+  it("голосовое вжигать некуда — субтитры пропускаем, дубляж отдаём", async () => {
+    const d = deps([{ ...base, subtitles: true }], {
+      getStatus: async () => ({ status: "dubbed", error: null, contentType: "audio/mpeg" }),
+    });
+    await pollJobs(d, NOW);
+    expect(d.calls.burn).toHaveLength(0);
+    expect(d.calls.audio).toHaveLength(1);
+  });
+
+  it("сорвавшиеся субтитры не съедают дубляж: ролик уходит как есть и с честной пометкой", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const d = deps([{ ...base, subtitles: true }], {
+      burnSubtitles: async () => {
+        throw new Error("ffmpeg вышел с кодом 1");
+      },
+    });
+    const res = await pollJobs(d, NOW);
+    expect(res.delivered).toBe(1);
+    expect((d.calls.video[0][1] as Buffer).length).toBe(1024);
+    expect(String(d.calls.video[0][3])).toContain("субтитры не легли");
+    spy.mockRestore();
   });
 
   it("падение одной задачи не уносит остальные", async () => {

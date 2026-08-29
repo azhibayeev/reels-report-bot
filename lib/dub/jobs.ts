@@ -18,6 +18,11 @@ export interface DubJob {
   createdAt: string;
   /** Отметка начатой доставки — защита от двух тиков крона на одной задаче. */
   deliveringAt?: string;
+  /** Исходник в Blob, если ролик пришёл через страницу загрузки: его удаляет
+   *  доставка, потому что ElevenLabs он нужен только в момент создания дубляжа. */
+  blobUrl?: string;
+  /** Ответ на вопрос о субтитрах: вжигать ли их в готовый дубляж. */
+  subtitles?: boolean;
 }
 
 export function jobPath(jobId: string): string {

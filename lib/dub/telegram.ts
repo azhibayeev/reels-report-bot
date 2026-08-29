@@ -38,6 +38,39 @@ export async function sendMessage(chatId: number | string, text: string): Promis
   return msg.message_id;
 }
 
+export interface Button {
+  text: string;
+  data: string;
+}
+
+/**
+ * Вопрос с кнопками. Это же сообщение потом становится строкой статуса: заводить
+ * под статус второе — значит оставить вопрос в чате навсегда с живыми кнопками.
+ */
+export async function sendMessageWithButtons(
+  chatId: number | string,
+  text: string,
+  buttons: Button[]
+): Promise<number> {
+  const msg = await call<{ message_id: number }>("sendMessage", {
+    chat_id: chatId,
+    text,
+    link_preview_options: { is_disabled: true },
+    reply_markup: { inline_keyboard: [buttons.map((b) => ({ text: b.text, callback_data: b.data }))] },
+  });
+  return msg.message_id;
+}
+
+// Без ответа кнопка крутит часики у нажавшего до таймаута Telegram — даже если
+// работа уже пошла. Ответ обязателен, а его провал ни на что не влияет.
+export async function answerCallback(callbackId: string, text?: string): Promise<void> {
+  try {
+    await call("answerCallbackQuery", { callback_query_id: callbackId, text });
+  } catch {
+    /* пусто: запоздалый ответ Telegram отвергает, работа от этого не страдает */
+  }
+}
+
 // Правка статуса — не главное: сорвалась она или нет, дубляж всё равно должен доехать.
 export async function editMessage(chatId: number | string, messageId: number, text: string): Promise<void> {
   try {
@@ -109,7 +142,9 @@ export async function setWebhook(url: string, secret: string): Promise<void> {
   await call("setWebhook", {
     url,
     secret_token: secret,
-    allowed_updates: ["message"],
+    // callback_query обязателен: без него нажатия на «С субтитрами» до бота не
+    // доходят вовсе — Telegram молча их не шлёт, и кнопки выглядят сломанными.
+    allowed_updates: ["message", "callback_query"],
     drop_pending_updates: true,
   });
 }
@@ -136,9 +171,16 @@ export interface TgMessage {
   document?: TgMedia;
 }
 
+export interface TgCallbackQuery {
+  id: string;
+  data?: string;
+  message?: { message_id: number; chat: { id: number } };
+}
+
 export interface TgUpdate {
   update_id: number;
   message?: TgMessage;
+  callback_query?: TgCallbackQuery;
 }
 
 /** Видео, аудио, кружок или документ с медийным mime — всё, что имеет смысл дублировать. */

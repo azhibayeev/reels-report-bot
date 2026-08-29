@@ -106,6 +106,19 @@ export async function downloadDub(dubbingId: string): Promise<Buffer> {
   return Buffer.from(await res.arrayBuffer());
 }
 
+/**
+ * Готовый перевод репликами с таймингами — тот же, что ElevenLabs положил в
+ * озвучку. Свой разбор речи для субтитров не нужен: он уже сделан и оплачен.
+ */
+export async function getTranscript(dubbingId: string): Promise<string> {
+  const res = await xi(
+    `/dubbing/${dubbingId}/transcript/${TARGET_LANG}?format_type=srt`,
+    {},
+    "getTranscript"
+  );
+  return res.text();
+}
+
 export interface Subscription {
   tier: string;
   used: number;

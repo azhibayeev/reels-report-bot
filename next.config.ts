@@ -7,6 +7,16 @@ const nextConfig: NextConfig = {
   // Бинарники ffmpeg лежат в node_modules и не попадают в трассировку сами:
   // без этого рендер на Vercel падает с ENOENT.
   outputFileTracingIncludes: {
+    // Бот дубляжа вжигает субтитры тем же ffmpeg и тем же шрифтом, что ферма —
+    // хука, поэтому и трассировка ему нужна та же.
+    "/api/dub/poll": [
+      "./node_modules/ffmpeg-static/ffmpeg",
+      "./node_modules/ffprobe-static/bin/**",
+      "./assets/hook.ttf",
+      "./assets/hook.ttf.LICENSE.txt",
+      "./node_modules/@napi-rs/canvas-linux-x64-gnu/**",
+      "./node_modules/@napi-rs/canvas/**",
+    ],
     "/api/farm/render": [
       "./node_modules/ffmpeg-static/ffmpeg",
       "./node_modules/ffprobe-static/bin/**",

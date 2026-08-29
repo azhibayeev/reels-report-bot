@@ -22,9 +22,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
+  // Хост читаем здесь, а не в after(): к моменту фоновой работы запроса уже нет,
+  // а боту он нужен — из него собирается ссылка на страницу загрузки.
+  const baseUrl = `https://${req.headers.get("x-forwarded-host") ?? req.nextUrl.host}`;
+
   after(async () => {
     try {
-      await handleUpdate(update);
+      await handleUpdate(update, baseUrl);
     } catch (e) {
       console.error(`dub: обработка апдейта ${update.update_id} — ${e instanceof Error ? e.stack : e}`);
       if (update.message) await notifyStartFailed(update.message.chat.id, e);

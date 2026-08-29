@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { explain, isAllowed } from "../lib/dub/bot";
+import { callbackData, explain, isAllowed, parseCallback } from "../lib/dub/bot";
 import { pickMedia, TgMessage } from "../lib/dub/telegram";
 
 const msg = (over: Partial<TgMessage>): TgMessage => ({ message_id: 1, chat: { id: 77 }, ...over });
@@ -53,5 +53,30 @@ describe("explain", () => {
 
   it("незнакомую ошибку отдаёт как есть — глотать её хуже, чем показать сырой", () => {
     expect(explain(new Error("connect ETIMEDOUT"))).toBe("connect ETIMEDOUT");
+  });
+});
+
+describe("кнопки субтитров", () => {
+  it("ответ читается обратно", () => {
+    expect(parseCallback(callbackData(true, "77-5"))).toEqual({ subtitles: true, jobId: "77-5" });
+    expect(parseCallback(callbackData(false, "77-5"))).toEqual({ subtitles: false, jobId: "77-5" });
+  });
+
+  it("id группы с минусом и дефисом внутри не рвётся по разделителю", () => {
+    const data = callbackData(true, "-1002234567890-12345");
+    expect(parseCallback(data)).toEqual({ subtitles: true, jobId: "-1002234567890-12345" });
+  });
+
+  it("влезает в 64 байта callback_data, иначе Telegram отвергнет саму кнопку", () => {
+    expect(Buffer.byteLength(callbackData(true, "-1002234567890-999999"))).toBeLessThanOrEqual(64);
+  });
+
+  it("чужое и порченое не трогает: это может быть кнопка другого бота или старого формата", () => {
+    expect(parseCallback(undefined)).toBeNull();
+    expect(parseCallback("")).toBeNull();
+    expect(parseCallback("sub:")).toBeNull();
+    expect(parseCallback("sub:1:")).toBeNull();
+    expect(parseCallback("sub:2:77-5")).toBeNull();
+    expect(parseCallback("что-то:1:77-5")).toBeNull();
   });
 });

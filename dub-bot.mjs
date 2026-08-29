@@ -11,6 +11,9 @@ import path from "node:path";
 // отвечать 409, пока вебхук не снят —
 //   curl -X POST "https://api.telegram.org/bot<TOKEN>/deleteWebhook"
 //
+// Обход лимита в 20 МБ — страница /dub/<токен> с заливкой прямо в Blob — есть
+// только на Vercel: здесь тяжёлый ролик по-прежнему получит только объяснение.
+//
 // Запуск:
 //   TG_DUB_TOKEN='...' ELEVENLABS_API_KEY='...' node dub-bot.mjs
 //   nohup env TG_DUB_TOKEN='...' ELEVENLABS_API_KEY='...' node dub-bot.mjs >> dub-bot.log 2>&1 &
