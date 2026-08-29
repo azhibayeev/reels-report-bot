@@ -16,6 +16,7 @@ import {
   formatMessage,
   formatStoreClicksMessage,
   formatTargetMessage,
+  targetWorthSending,
 } from "../../../lib/format";
 import { getLeadLevels } from "../../../lib/leads";
 import { getAdInsights } from "../../../lib/meta";
@@ -263,13 +264,19 @@ export async function GET(req: NextRequest) {
       // Сводка по таргету (реклама Meta + разбивка лидов по уровню инвестора) → тема Daily.
       // Рекламные цифры — за вчерашний рекламный день (Insights не умеет скользящее 24ч);
       // разбивка лидов — за суточный спринт (с 12:30). Изолировано: ошибка не роняет отчёт.
+      //
+      // В дни без открутки сводка не уходит вовсе: строка нулей ничего не говорит, а в
+      // ежедневной пачке приучает пролистывать мимо. Ручные /target и /targettotal
+      // отвечают всегда — там нулям есть кого информировать (см. targetWorthSending).
       try {
         const ads = await getAdInsights("yesterday");
         const sprintStart = lastSprintStart(new Date(now.getTime() - 3600_000));
         const levels = await getLeadLevels(sprintStart.toISOString());
-        await sendMessage(
-          formatTargetMessage(ads, levels, "за сутки", "с 12:30 вчера")
-        );
+        if (targetWorthSending(ads, levels)) {
+          await sendMessage(formatTargetMessage(ads, levels, "за сутки", "с 12:30 вчера"));
+        } else {
+          console.log("target report skipped: открутки не было и лидов за период нет");
+        }
       } catch (e) {
         console.error("target report failed:", e);
       }

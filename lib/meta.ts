@@ -120,3 +120,13 @@ export async function getAdInsights(window: AdWindow): Promise<AdInsights> {
   // Пустой data = за окно не было открутки → нулевой отчёт, а не ошибка.
   return parseInsights(j.data?.[0], process.env.META_LEAD_ACTION_TYPE);
 }
+
+/**
+ * Крутилась ли реклама за окно. Пустой `data` из Insights даёт `hasData: false`, но
+ * кабинет умеет вернуть и строку из нулей — кампания включена, открутки не было, —
+ * поэтому смотрим на деньги и показы, а не на наличие строки. Показы без списанных
+ * денег тоже считаем откруткой: кабинет показывает их раньше, чем спишет.
+ */
+export function adsRan(ads: AdInsights): boolean {
+  return ads.spend > 0 || ads.impressions > 0;
+}

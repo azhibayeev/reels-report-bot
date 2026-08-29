@@ -1,6 +1,6 @@
 import { ambassadorLabel } from "./applink";
 import type { StoreClicks } from "./applink-store";
-import type { AdInsights } from "./meta";
+import { adsRan, type AdInsights } from "./meta";
 import type { LeadLevels } from "./leads";
 import type { ClicksStats } from "./posthog";
 import { DayPoint, FollowerChanges, FollowerStats, FunnelSeries, Report, Snapshot } from "./types";
@@ -255,6 +255,21 @@ function adsWindowLabel(ads: AdInsights): string | null {
   return ads.periodStart === ads.periodEnd
     ? day(ads.periodStart)
     : `${day(ads.periodStart)} — ${day(ads.periodEnd)}`;
+}
+
+/**
+ * Есть ли в дневной сводке по таргету хоть что-то, ради чего её слать. Нулевой отчёт
+ * («потрачено $0,00, показов 0») не сообщает ничего — просьба Абая его не слать.
+ *
+ * Но в том же сообщении едет разбивка лидов, а она приходит из квиза, а не из кабинета:
+ * заявки бывают и без открутки, и терять их из-за молчащей рекламы нельзя. Поэтому
+ * сообщение уходит, если крутилась реклама ИЛИ за период есть лиды.
+ *
+ * Ручных /target и /targettotal правило не касается: на прямой вопрос бот обязан
+ * ответить, даже если весь ответ — нули.
+ */
+export function targetWorthSending(ads: AdInsights, levels: LeadLevels | null): boolean {
+  return adsRan(ads) || (levels != null && levels.total > 0);
 }
 
 // Сводка по таргету: рекламные метрики + разбивка лидов по уровню инвестора.
