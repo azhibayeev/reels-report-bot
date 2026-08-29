@@ -1,16 +1,15 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import { access, constants, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { put } from "@vercel/blob";
-import ffmpegStatic from "ffmpeg-static";
 import { after, NextRequest, NextResponse } from "next/server";
 import { deleteBlobQuiet, listItems, OUT_PREFIX, saveItem } from "../../../../lib/farm/store";
 import { queueRendered } from "../../../../lib/farm/queue";
 import { nextFreeSlot, slotConfigFromEnv } from "../../../../lib/farm/slots";
 import { loadPace, paceSlotConfig } from "../../../../lib/farm/pace";
 import { formatSlot } from "../../../../lib/farm/commands";
+import { ffmpegPath, ffprobePath, fontPath } from "../../../../lib/binaries";
 import { escapeHtml } from "../../../../lib/format";
 import { sendMessage } from "../../../../lib/telegram";
 import { sendVideoWithButtons } from "../../../../lib/farm/telegram";
@@ -24,51 +23,6 @@ import { drawCtaPng, drawHookPng } from "../../../../lib/farm/text-image";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 300;
-
-// ffmpeg-static отдаёт путь, посчитанный на сборке (в проде это /ROOT/...), а в
-// собранной функции файл лежит относительно process.cwd(). Поэтому перебираем
-// кандидатов и берём существующий; в сообщении об ошибке — весь список, иначе
-// ENOENT не говорит вообще ничего.
-function firstExisting(candidates: (string | undefined | null)[], what: string): string {
-  const tried: string[] = [];
-  for (const candidate of candidates) {
-    if (!candidate) continue;
-    tried.push(candidate);
-    if (existsSync(candidate)) return candidate;
-  }
-  throw new Error(`${what} не найден. Проверены пути: ${tried.join(", ")}`);
-}
-
-function ffmpegPath(): string {
-  return firstExisting(
-    [
-      process.env.FARM_FFMPEG_PATH,
-      join(process.cwd(), "node_modules", "ffmpeg-static", "ffmpeg"),
-      ffmpegStatic,
-    ],
-    "бинарник ffmpeg"
-  );
-}
-
-// ffprobe-static не типизирован (нет .d.ts и @types), поэтому путь до бинарника
-// собираем сами, а не через `import ffprobeStatic from "ffprobe-static"" — иначе
-// tsc падает на самом импорте. Каталог уже включён в трассировку в next.config.ts.
-function ffprobePath(): string {
-  return firstExisting(
-    [
-      process.env.FARM_FFPROBE_PATH,
-      join(process.cwd(), "node_modules", "ffprobe-static", "bin", process.platform, process.arch, "ffprobe"),
-    ],
-    "бинарник ffprobe"
-  );
-}
-
-function fontPath(): string {
-  return firstExisting(
-    [process.env.FARM_FONT_PATH, join(process.cwd(), "assets", "hook.ttf")],
-    "шрифт хука"
-  );
-}
 
 // Копим stderr с потолком: болтливый ffmpeg способен насыпать мегабайты,
 // а нам для диагностики хватает хвоста.
