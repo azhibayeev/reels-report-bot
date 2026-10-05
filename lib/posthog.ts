@@ -43,9 +43,13 @@ export function lastSprintStart(now: Date = new Date()): Date {
   return b;
 }
 
-async function phQuery(hogql: string): Promise<unknown[][]> {
+// project — id проекта PostHog; по умолчанию проект лендинга. Отчёт по приложению
+// передаёт свой (lib/app-stats.ts): ключ один, проекты разные.
+export async function phQuery(
+  hogql: string,
+  project: string | undefined = process.env.POSTHOG_PROJECT_ID
+): Promise<unknown[][]> {
   const key = process.env.POSTHOG_PERSONAL_API_KEY;
-  const project = process.env.POSTHOG_PROJECT_ID;
   if (!key || !project) throw new Error("POSTHOG_PERSONAL_API_KEY / POSTHOG_PROJECT_ID не заданы");
   const res = await fetch(`https://${HOST}/api/projects/${project}/query/`, {
     method: "POST",
