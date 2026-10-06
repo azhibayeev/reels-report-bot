@@ -430,13 +430,17 @@ curl "https://<домен>/api/sheet?account=qurany-app" -H "Authorization: Bear
 
 Список функций и событий, по которым их видно, — `APP_FEATURES` в `lib/app-stats.ts`. Имена событий — договор с приложением (`qurany-rn/lib/analytics.ts`, тапы в читалке — `qurany-rn/lib/reader-messages.ts`): переименуют там — строка молча обнулится здесь. Тафсир, заметка к аяту и произношение слова считаются по открытию, а не по результату.
 
-Переменная — id проекта PostHog **приложения** (PostHog → Settings → Project → Project ID). Персональный ключ `POSTHOG_PERSONAL_API_KEY` должен иметь доступ на чтение к этому проекту (scope `query:read`):
+Проект PostHog приложения живёт в **другом аккаунте**, чем проект лендинга, поэтому у сводки свои id проекта и ключ (общий `POSTHOG_PERSONAL_API_KEY` получает на него 403 «You don't have access to the project»):
+
+1. Id проекта: PostHog (аккаунт приложения) → Settings → Project → **Project ID**.
+2. Ключ: там же → Settings → Account → **Personal API keys** → Create → доступ только к этому проекту, scope **Query: Read**.
 
 ```bash
 vercel env add POSTHOG_APP_PROJECT_ID production
+vercel env add POSTHOG_APP_PERSONAL_API_KEY production --sensitive
 ```
 
-Без неё сводка берёт общий `POSTHOG_PROJECT_ID` (проект лендинга) — цифры там будут нулевые.
+Без них сводка берёт общие `POSTHOG_PROJECT_ID` / `POSTHOG_PERSONAL_API_KEY` лендинга. Если сводка не ушла, бот пишет в чат «⚠️ Сводка по приложению не ушла» с причиной.
 
 Проверить без повтора всего дневного отчёта (Bearer `CRON_SECRET`):
 
@@ -488,7 +492,7 @@ vercel env add PLAY_REPORTS_BUCKET production  # pubsite_prod_<число>
 | `TELEGRAM_CHAT_ID`   | Шаг 2.2 — отрицательное число        |
 | `CRON_SECRET`        | Шаг 3.3 — `openssl rand -hex 32`     |
 | `BLOB_READ_WRITE_TOKEN` | Добавляется Vercel автоматически |
-| `POSTHOG_APP_PROJECT_ID` | Сводка по приложению — id проекта приложения в PostHog (раздел «Сводка по приложению Qurany») |
+| `POSTHOG_APP_PROJECT_ID` / `POSTHOG_APP_PERSONAL_API_KEY` | Сводка по приложению — id проекта и ключ (Query: Read) из аккаунта PostHog приложения (раздел «Сводка по приложению Qurany») |
 | `ASC_ISSUER_ID` / `ASC_KEY_ID` / `ASC_PRIVATE_KEY` / `ASC_VENDOR_NUMBER` | Скачивания App Store — ключ App Store Connect API с ролью Sales (раздел «Скачивания из сторов») |
 | `PLAY_REPORTS_BUCKET` | Скачивания Google Play — имя бакета отчётов Play; доступ через `GOOGLE_SA_EMAIL` (раздел «Скачивания из сторов») |
 | `FARM_TOKEN_SECRET`  | Ферма рилсов — `openssl rand -hex 32` |

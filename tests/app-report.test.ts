@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { sendAppReport } from "../lib/app-report";
+import { notifyAppReportFailure, sendAppReport } from "../lib/app-report";
 
 const NOW = new Date("2026-10-05T05:45:00Z");
 
@@ -52,6 +52,24 @@ describe("sendAppReport", () => {
     const r = await sendAppReport(NOW);
     expect(telegram).toEqual(["sendMessage", "sendPhoto"]);
     expect(r.chart).toMatch(/^отправлен/);
+  });
+
+  it("сбой сводки виден в чате, а не только в логах Vercel", async () => {
+    const sent: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: { body: string }) => {
+        sent.push(JSON.parse(init.body).text);
+        return new Response("{}", { status: 200 });
+      })
+    );
+    await notifyAppReportFailure(
+      new Error(`PostHog query failed (403): {"detail":"You don't have access to the project."}`)
+    );
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("Сводка по приложению не ушла");
+    expect(sent[0]).toContain("POSTHOG_APP_PERSONAL_API_KEY");
+    expect(sent[0]).toContain("<code>PostHog query failed (403)");
   });
 
   it("сломанный график не отменяет уже отправленное сообщение", async () => {

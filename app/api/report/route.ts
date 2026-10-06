@@ -7,7 +7,7 @@ import {
   computeDailyViewGains,
   renderChartPng,
 } from "../../../lib/chart";
-import { sendAppReport } from "../../../lib/app-report";
+import { notifyAppReportFailure, sendAppReport } from "../../../lib/app-report";
 import { computeReport } from "../../../lib/diff";
 import { loadDailyStoreClicks, loadStoreClicks } from "../../../lib/applink-store";
 import {
@@ -292,6 +292,7 @@ export async function GET(req: NextRequest) {
       } catch (e) {
         console.error("app report failed:", e);
         app = `ошибка: ${e instanceof Error ? e.message : String(e)}`;
+        await notifyAppReportFailure(e);
       }
     }
 

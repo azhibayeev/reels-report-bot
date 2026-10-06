@@ -44,17 +44,20 @@ describe("featureLabelSql", () => {
 describe("getAppStats", () => {
   const queries: string[] = [];
   const urls: string[] = [];
+  const auths: string[] = [];
 
   beforeEach(() => {
     queries.length = 0;
     urls.length = 0;
+    auths.length = 0;
     vi.stubEnv("POSTHOG_PERSONAL_API_KEY", "phx_test");
     vi.stubEnv("POSTHOG_PROJECT_ID", "111");
     vi.stubEnv("POSTHOG_APP_PROJECT_ID", "222");
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (url: string, init: { body: string }) => {
+      vi.fn(async (url: string, init: { body: string; headers: Record<string, string> }) => {
         urls.push(url);
+        auths.push(init.headers.Authorization);
         const q = JSON.parse(init.body).query.query as string;
         queries.push(q);
         let results: unknown[][];
@@ -128,6 +131,20 @@ describe("getAppStats", () => {
     expect(urls.length).toBeGreaterThan(0);
     for (const u of urls) expect(u).toContain("/api/projects/222/query/");
     for (const q of queries) expect(q).toContain("properties.environment = 'production'");
+  });
+
+  it("проект приложения читает своим ключом: ключ лендинга к нему доступа не имеет", async () => {
+    // 2026-10-06: общий ключ получил 403 «You don't have access to the project» —
+    // проект приложения живёт в другом аккаунте PostHog.
+    vi.stubEnv("POSTHOG_APP_PERSONAL_API_KEY", "phx_app");
+    await getAppStats(NOW);
+    expect(auths.length).toBeGreaterThan(0);
+    for (const a of auths) expect(a).toBe("Bearer phx_app");
+  });
+
+  it("без своего ключа — общий POSTHOG_PERSONAL_API_KEY", async () => {
+    await getAppStats(NOW);
+    for (const a of auths) expect(a).toBe("Bearer phx_test");
   });
 
   it("без отдельного проекта приложения берёт общий POSTHOG_PROJECT_ID", async () => {

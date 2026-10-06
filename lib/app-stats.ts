@@ -128,8 +128,11 @@ function onAxis(days: string[], rows: unknown[][]): DayPoint[] {
 }
 
 export async function getAppStats(now: Date): Promise<AppStats> {
+  // Проект приложения живёт в другом аккаунте PostHog, чем лендинг: ключ лендинга
+  // получает к нему 403 — поэтому у приложения свой ключ.
   const project = process.env.POSTHOG_APP_PROJECT_ID || process.env.POSTHOG_PROJECT_ID;
-  const q = (hogql: string) => phQuery(hogql, project);
+  const key = process.env.POSTHOG_APP_PERSONAL_API_KEY || process.env.POSTHOG_PERSONAL_API_KEY;
+  const q = (hogql: string) => phQuery(hogql, project, key);
 
   const { day, from, to } = appReportDay(now);
   const days = lastDayKeys(new Date(to * 1000 - 1000), APP_SERIES_DAYS);
