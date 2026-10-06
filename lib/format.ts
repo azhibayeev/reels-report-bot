@@ -236,6 +236,14 @@ export function formatAppMessage(s: AppStats, stores?: StoreDownloads): string {
     );
   }
 
+  // Режимы чтения — своей строкой: в топ функций они не входят (см. APP_FEATURES).
+  if (s.modes.length > 0) {
+    const modes = s.modes
+      .map((m) => `${escapeHtml(m.name)} <b>${nf.format(m.users)}</b> (${pct(m.users, s.dau)})`)
+      .join(" · ");
+    lines.push("", `📖 <b>Режимы чтения</b>: ${modes}`);
+  }
+
   lines.push("", "<i>Установки — по первому открытию приложения; сутки по Джакарте.</i>");
   return lines.join("\n");
 }

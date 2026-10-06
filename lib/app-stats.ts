@@ -49,10 +49,8 @@ export const APP_FEATURES: ReadonlyArray<{ name: string; when: string }> = [
     name: "Хатм",
     when: "event IN ('day_marked_read', 'khatam_created', 'khatam_joined', 'khatam_started', 'khatam_completed')",
   },
-  {
-    name: "Режимы Guided / Suflor",
-    when: "event IN ('reader_opened', 'reader_mode_changed') AND properties.mode IN ('guided', 'suflor')",
-  },
+  // Режимы чтения (Mushaf / Guided / Suflor) здесь намеренно нет: у них своя строка
+  // в сводке — см. READER_MODES ниже.
   {
     // Khatam Lock + Prayer Lock одной строкой: включили, открыли настройки или
     // упёрлись в экран заблокированного приложения.
@@ -68,6 +66,14 @@ export const APP_FEATURES: ReadonlyArray<{ name: string; when: string }> = [
   { name: "Напоминания", when: "event = 'reminder_opened'" },
   { name: "Время намаза", when: "event = 'screen_viewed' AND properties.screen = 'prayer_times'" },
 ];
+
+/**
+ * Режимы читалки: значение свойства `mode` → подпись. Человек «пользовался режимом»,
+ * если открыл в нём читалку, переключился на него, начал в нём читать или включил
+ * аудио. Один человек может попасть в несколько режимов за день.
+ */
+const READER_MODES: Record<string, string> = { mushaf: "Mushaf", guided: "Guided", suflor: "Suflor" };
+const MODE_EVENTS = "event IN ('reader_opened', 'reader_mode_changed', 'reading_started', 'audio_started')";
 
 /** Метка функции для события прямо в HogQL; '' — событие не функция. */
 export function featureLabelSql(): string {
@@ -93,6 +99,8 @@ export interface AppStats {
   prevNewInstalls: number;
   /** Все функции, которыми пользовались за день, по убыванию людей. */
   features: FeatureUsage[];
+  /** Режимы чтения за день (Mushaf / Guided / Suflor), по убыванию людей. */
+  modes: FeatureUsage[];
   /** Ряды за APP_SERIES_DAYS суток, заканчивая отчётным днём; дни без событий — 0. */
   dauSeries: DayPoint[];
   installSeries: DayPoint[];
@@ -128,7 +136,7 @@ export async function getAppStats(now: Date): Promise<AppStats> {
   const seriesFrom = to - APP_SERIES_DAYS * DAY_S;
   const jakartaDay = (col: string) => `toDate(toTimeZone(${col}, 'Asia/Jakarta'))`;
 
-  const [dauRows, installRows, mauRows, featureRows] = await Promise.all([
+  const [dauRows, installRows, mauRows, featureRows, modeRows] = await Promise.all([
     q(
       `SELECT ${jakartaDay("timestamp")} AS d, uniqIf(distinct_id, ${PROD}) AS u FROM events ` +
         `WHERE ${at(seriesFrom, to)} GROUP BY d ORDER BY d`
@@ -145,17 +153,26 @@ export async function getAppStats(now: Date): Promise<AppStats> {
       `SELECT ${featureLabelSql()} AS f, uniqIf(distinct_id, ${PROD}) AS u FROM events ` +
         `WHERE ${at(from, to)} GROUP BY f`
     ),
+    q(
+      `SELECT properties.mode AS m, uniqIf(distinct_id, ${PROD}) AS u FROM events ` +
+        `WHERE ${at(from, to)} AND ${MODE_EVENTS} GROUP BY m`
+    ),
   ]);
 
   const dauSeries = onAxis(days, dauRows);
   const installSeries = onAxis(days, installRows);
   const last = (s: DayPoint[], back: number) => s[s.length - 1 - back]?.value ?? 0;
 
+  // Ничья — по алфавиту, чтобы порядок не прыгал от запуска к запуску.
+  const byUsers = (a: FeatureUsage, b: FeatureUsage) => b.users - a.users || a.name.localeCompare(b.name, "ru");
   const features = featureRows
     .map((r) => ({ name: String(r[0]), users: N(r[1]) }))
     .filter((f) => f.name !== "" && f.users > 0)
-    // Ничья — по алфавиту, чтобы порядок не прыгал от запуска к запуску.
-    .sort((a, b) => b.users - a.users || a.name.localeCompare(b.name, "ru"));
+    .sort(byUsers);
+  const modes = modeRows
+    .map((r) => ({ name: READER_MODES[String(r[0])] ?? "", users: N(r[1]) }))
+    .filter((m) => m.name !== "" && m.users > 0)
+    .sort(byUsers);
 
   return {
     day,
@@ -165,6 +182,7 @@ export async function getAppStats(now: Date): Promise<AppStats> {
     newInstalls: last(installSeries, 0),
     prevNewInstalls: last(installSeries, 1),
     features,
+    modes,
     dauSeries,
     installSeries,
   };

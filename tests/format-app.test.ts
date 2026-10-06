@@ -19,6 +19,7 @@ const stats = (over: Partial<AppStats> = {}): AppStats => ({
     { name: "Произношение слова", users: 64 },
     { name: "Поиск", users: 12 },
   ],
+  modes: [],
   dauSeries: [],
   installSeries: [],
   ...over,
@@ -52,6 +53,24 @@ describe("сообщение по приложению", () => {
     expect(m).not.toContain("Infinity");
     expect(m).not.toContain("DAU/MAU");
     expect(m).toContain("за день никто не пользовался");
+  });
+
+  it("режимы чтения — одной строкой с долей от DAU", () => {
+    const m = formatAppMessage(
+      stats({
+        dau: 773,
+        modes: [
+          { name: "Guided", users: 420 },
+          { name: "Mushaf", users: 348 },
+          { name: "Suflor", users: 48 },
+        ],
+      })
+    );
+    expect(m).toContain("📖 <b>Режимы чтения</b>: Guided <b>420</b> (54%) · Mushaf <b>348</b> (45%) · Suflor <b>48</b> (6%)");
+  });
+
+  it("без чтения за день строки режимов нет", () => {
+    expect(formatAppMessage(stats({ modes: [] }))).not.toContain("Режимы чтения");
   });
 
   it("экранирует HTML в названиях функций", () => {

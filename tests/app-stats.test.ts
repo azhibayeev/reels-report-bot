@@ -32,6 +32,10 @@ describe("featureLabelSql", () => {
     }
   });
 
+  it("режимы не дублируются среди функций — у них своя строка", () => {
+    expect(APP_FEATURES.map((f) => f.name).join(" ")).not.toMatch(/Guided|Suflor|Mushaf/);
+  });
+
   it("названия не ломают строковый литерал HogQL", () => {
     for (const f of APP_FEATURES) expect(f.name).not.toMatch(/['\\]/);
   });
@@ -59,6 +63,9 @@ describe("getAppStats", () => {
           results = [["2026-10-03", 5], ["2026-10-04", 9]];
         } else if (q.includes("multiIf(")) {
           results = [["", 999], ["Аудио", 40], ["Чтение", 120], ["Тафсир", 40], ["Хатм", 75]];
+        } else if (q.includes("properties.mode AS m")) {
+          // Режим без значения (старые события) — не режим.
+          results = [["mushaf", 90], ["guided", 110], ["suflor", 12], [null, 5]];
         } else if (q.includes("GROUP BY d")) {
           // DAU: дня 02.10 в ответе нет вовсе (ни одного события).
           results = [["2026-09-21", 100], ["2026-10-03", 180], ["2026-10-04", 200]];
@@ -97,6 +104,15 @@ describe("getAppStats", () => {
     ]);
   });
 
+  it("режимы чтения — отдельно, по людям, без пустого режима", async () => {
+    const s = await getAppStats(NOW);
+    expect(s.modes).toEqual([
+      { name: "Guided", users: 110 },
+      { name: "Mushaf", users: 90 },
+      { name: "Suflor", users: 12 },
+    ]);
+  });
+
   it("ряды за 14 дней без дыр: нет событий за день — ноль", async () => {
     const s = await getAppStats(NOW);
     expect(s.dauSeries).toHaveLength(14);
@@ -129,5 +145,6 @@ describe("getAppStats", () => {
     expect(s.dau).toBe(0);
     expect(s.mau).toBe(0);
     expect(s.features).toEqual([]);
+    expect(s.modes).toEqual([]);
   });
 });
