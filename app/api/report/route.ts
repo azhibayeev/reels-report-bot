@@ -7,7 +7,6 @@ import {
   computeDailyViewGains,
   renderChartPng,
 } from "../../../lib/chart";
-import { notifyAppReportFailure, sendAppReport } from "../../../lib/app-report";
 import { computeReport } from "../../../lib/diff";
 import { loadDailyStoreClicks, loadStoreClicks } from "../../../lib/applink-store";
 import {
@@ -223,7 +222,6 @@ export async function GET(req: NextRequest) {
     // аккаунту не должен лишать команду отчёта по второму.
     const results: AccountResult[] = [];
     const failures: Array<{ account: string; error: string }> = [];
-    let app: string | undefined;
     for (const acc of accounts) {
       try {
         results.push(await runAccountReport(acc, now));
@@ -283,23 +281,13 @@ export async function GET(req: NextRequest) {
         console.error("target report failed:", e);
       }
 
-      // Сводка по приложению (DAU, MAU, установки, топ функций + график) → тема Daily.
-      // Отчётный день — вчерашние календарные сутки Джакарты (см. lib/app-stats.ts).
-      // Изолирована: сбой PostHog не отменяет уже отправленные отчёты.
-      try {
-        const r = await sendAppReport(now);
-        app = `отправлена за ${r.day} (DAU ${r.dau}), график: ${r.chart}`;
-      } catch (e) {
-        console.error("app report failed:", e);
-        app = `ошибка: ${e instanceof Error ? e.message : String(e)}`;
-        await notifyAppReportFailure(e);
-      }
+      // Сводка по приложению — свой крон /api/app-report (vercel.json), не здесь: так её
+      // можно перезапустить одну, без повтора всего отчёта и без защиты от дублей выше.
     }
 
     return NextResponse.json({
       ok: failures.length === 0,
       accounts: results,
-      ...(app ? { app } : {}),
       ...(failures.length > 0 ? { failures } : {}),
     });
   } catch (e) {

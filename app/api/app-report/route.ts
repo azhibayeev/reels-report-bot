@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { sendAppReport } from "../../../lib/app-report";
+import { notifyAppReportFailure, sendAppReport } from "../../../lib/app-report";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 /**
- * Ручной прогон сводки по приложению — только она, без рилсов и прочих блоков: проверить
- * цифры после настройки, не засыпая чат повтором всего дневного отчёта. Ежедневно та же
- * сводка уходит из /api/report.
+ * Сводка по приложению — свой ежедневный крон (vercel.json, 12:40 Джакарты — после
+ * дневного отчёта). Отдельно от /api/report, чтобы её можно было перезапустить одну:
+ * `vercel crons run /api/app-report` — без повтора рилсов и без защиты от дублей
+ * дневного отчёта, которая молча пропустила бы второй запуск за день.
  */
 export async function GET(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
@@ -20,6 +21,7 @@ export async function GET(req: NextRequest) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("app report failed:", e);
+    await notifyAppReportFailure(e);
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });
   }
 }
