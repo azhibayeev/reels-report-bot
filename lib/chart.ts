@@ -142,19 +142,70 @@ export function chartSkipReason(s: FunnelSeries): string | null {
   );
 }
 
-/**
- * Конфиг Chart.js для QuickChart: три этажа воронки на общей оси дней.
- * Этажи — это stacked-шкалы Chart.js v4 (stack + stackWeight): у каждого уровня своя
- * вертикальная область и свой масштаб, иначе 5 роликов и миллион просмотров на одной
- * шкале превращаются в прямую по нулю. Шкалы объявляются СНИЗУ ВВЕРХ, поэтому
- * список этажей разворачивается.
- */
+/** Конфиг Chart.js для QuickChart: три этажа воронки на общей оси дней. */
 export function buildFunnelChart(
   days: string[],
   s: FunnelSeries,
   title = "Воронка за 14 дней"
 ): Record<string, unknown> {
-  const levels = levelsOf(s);
+  return buildLevelsChart(
+    days,
+    levelsOf(s),
+    title,
+    "Вход → ролики · Середина → просмотры · Выход → заходы по ссылке и переходы в стор"
+  );
+}
+
+// Рисовать по одной точке бессмысленно, как и у воронки: нужен хотя бы второй день
+// с живыми пользователями.
+export function appChartSkipReason(dau: DayPoint[]): string | null {
+  const live = dau.filter((p) => p.value > 0).length;
+  return live >= 2 ? null : `мало данных (дней с пользователями: ${live})`;
+}
+
+/**
+ * График приложения: DAU сверху, новые установки снизу, у каждого свой этаж и масштаб —
+ * сотни DAU на одной шкале с единицами установок сплющили бы столбики в ноль.
+ */
+export function buildAppChart(
+  days: string[],
+  dau: DayPoint[],
+  installs: DayPoint[],
+  title = "Приложение Qurany · 14 дней"
+): Record<string, unknown> {
+  return buildLevelsChart(
+    days,
+    [
+      {
+        id: "yDau",
+        axisTitle: "DAU",
+        weight: 1.6,
+        series: [{ points: dau, label: "DAU", color: BLUE, labelValues: true }],
+      },
+      {
+        id: "yInstalls",
+        axisTitle: "Установки/день",
+        weight: 1,
+        series: [{ points: installs, label: "Новые установки", color: GREEN, bar: true, labelValues: true }],
+      },
+    ],
+    title,
+    "Уникальные люди за сутки (Джакарта) · установки — по первому открытию"
+  );
+}
+
+/**
+ * Этажи — это stacked-шкалы Chart.js v4 (stack + stackWeight): у каждого уровня своя
+ * вертикальная область и свой масштаб, иначе 5 роликов и миллион просмотров на одной
+ * шкале превращаются в прямую по нулю. Шкалы объявляются СНИЗУ ВВЕРХ, поэтому
+ * список этажей разворачивается.
+ */
+function buildLevelsChart(
+  days: string[],
+  levels: Level[],
+  title: string,
+  subtitle: string
+): Record<string, unknown> {
   const stacked = levels.length > 1;
 
   const scales: Record<string, unknown> = {
@@ -222,7 +273,7 @@ export function buildFunnelChart(
         title: { display: true, text: title, font: { size: 18 } },
         subtitle: {
           display: true,
-          text: "Вход → ролики · Середина → просмотры · Выход → заходы по ссылке и переходы в стор",
+          text: subtitle,
           color: "#6b7280",
           font: { size: 12 },
           padding: { bottom: 10 },

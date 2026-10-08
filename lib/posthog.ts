@@ -43,19 +43,38 @@ export function lastSprintStart(now: Date = new Date()): Date {
   return b;
 }
 
-async function phQuery(hogql: string): Promise<unknown[][]> {
-  const key = process.env.POSTHOG_PERSONAL_API_KEY;
-  const project = process.env.POSTHOG_PROJECT_ID;
+// При нехватке мощностей PostHog отвечает 503 «Queries are a little too busy right now»
+// (бывает 429/5xx) и сам советует повторить с паузой. 08.10 так упала сводка по
+// приложению. Остальные 4xx (ключ, доступ, запрос) повтором не лечатся — сразу ошибка.
+const RETRY_DELAYS_MS = [2_000, 5_000, 10_000];
+const retryable = (status: number): boolean => status === 429 || status >= 500;
+
+// project / key — проект PostHog и персональный ключ; по умолчанию лендинга. Отчёт по
+// приложению передаёт свои (lib/app-stats.ts): его проект в другом аккаунте PostHog,
+// и ключ лендинга получает к нему 403.
+export async function phQuery(
+  hogql: string,
+  project: string | undefined = process.env.POSTHOG_PROJECT_ID,
+  key: string | undefined = process.env.POSTHOG_PERSONAL_API_KEY
+): Promise<unknown[][]> {
   if (!key || !project) throw new Error("POSTHOG_PERSONAL_API_KEY / POSTHOG_PROJECT_ID не заданы");
-  const res = await fetch(`https://${HOST}/api/projects/${project}/query/`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ query: { kind: "HogQLQuery", query: hogql } }),
-  });
-  if (!res.ok) throw new Error(`PostHog query failed (${res.status}): ${await res.text()}`);
-  const j = (await res.json()) as { error?: string | null; results?: unknown[][] | null };
-  if (j.error) throw new Error(`PostHog query error: ${j.error}`);
-  return j.results ?? [];
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(`https://${HOST}/api/projects/${project}/query/`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ query: { kind: "HogQLQuery", query: hogql } }),
+    });
+    if (res.ok) {
+      const j = (await res.json()) as { error?: string | null; results?: unknown[][] | null };
+      if (j.error) throw new Error(`PostHog query error: ${j.error}`);
+      return j.results ?? [];
+    }
+    const body = await res.text();
+    if (!retryable(res.status) || attempt >= RETRY_DELAYS_MS.length) {
+      throw new Error(`PostHog query failed (${res.status}): ${body}`);
+    }
+    await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
+  }
 }
 
 const N = (v: unknown): number => Number(v) || 0;
