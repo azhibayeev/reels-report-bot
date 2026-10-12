@@ -1,5 +1,7 @@
 import { ambassadorLabel } from "./applink";
+import type { AppStats } from "./app-stats";
 import type { StoreClicks } from "./applink-store";
+import type { StoreDownloads, StoreResult } from "./store-downloads";
 import { adsRan, type AdInsights } from "./meta";
 import type { LeadLevels } from "./leads";
 import type { ClicksStats } from "./posthog";
@@ -161,6 +163,118 @@ export function formatFunnelCaption(account: string, day: string, s: FunnelSerie
     `📈 <b>Воронка за 14 дней · ${escapeHtml(account)}</b>\n` +
     `За сутки: вход ${n(s.published)} роликов → ${n(s.views)} просмотров → ` +
     `выход ${n(s.joins)} заходов в сообщество · ${n(s.store)} переходов в стор`
+  );
+}
+
+/** Сколько функций показывать в ежедневной сводке приложения. */
+export const APP_TOP_FEATURES = 5;
+
+// YYYY-MM-DD → dd.mm
+function ddmm(dateKey: string): string {
+  const [, m, d] = dateKey.split("-");
+  return `${d}.${m}`;
+}
+
+// Доля от DAU целым процентом; без DAU доли нет.
+function pct(part: number, whole: number): string {
+  return whole > 0 ? `${Math.round((part / whole) * 100)}%` : "—";
+}
+
+// Строка стора; не подключённый стор (status "off") сюда не попадает. Всего — за всё время,
+// «+» — за последний готовый день стора со своей датой: сторы отдают отчёты с опозданием
+// (App Store ~сутки, Google Play 2–3), и без даты цифра читается как вчерашняя.
+// App Store считает первые + повторные скачивания (Total Downloads в App Store Connect),
+// Google Play — людей, впервые поставивших приложение.
+function storeLine(icon: string, store: string, r: Exclude<StoreResult, { status: "off" }>, reportDay: string): string {
+  if (r.status === "error") return `${icon} ${store}: нет данных (${escapeHtml(r.message.slice(0, 200))})`;
+  const late = r.date < reportDay ? " <i>(стор отдаёт с опозданием)</i>" : "";
+  return `${icon} ${store}: <b>${nf.format(r.total)}</b> · +${nf.format(r.day)} за ${ddmm(r.date)}${late}`;
+}
+
+/**
+ * Сводка по приложению за вчерашний день Джакарты. Сверху — всего скачиваний из сторов
+ * рядом с DAU, под ним каждый стор: всего и «+» за его последний готовый день. Люди =
+ * установки (анонимно): переустановка считается новым человеком. Функции — сколько людей
+ * ими пользовались, доля — от DAU того же дня.
+ */
+export function formatAppMessage(s: AppStats, stores?: StoreDownloads): string {
+  const day = ddmm(s.day);
+  const prevDay = ddmm(prevDayKey(s.day));
+  const dau = `👤 DAU: <b>${nf.format(s.dau)}</b> (${signed(s.dau - s.prevDau)} к ${prevDay})`;
+
+  // Не подключённый стор молчит: строка «не подключено» каждый день — шум. Появится сама,
+  // когда заведут его переменные. Ошибку подключённого — показываем, а итог помечаем,
+  // что он без этого стора.
+  const connected = stores
+    ? ([["🍏", "App Store", stores.appStore], ["🤖", "Google Play", stores.play]] as const).filter(
+        ([, , r]) => r.status !== "off"
+      )
+    : [];
+  const head: string[] = [dau];
+  if (connected.length > 0) {
+    const ok = connected.flatMap(([, , r]) => (r.status === "ok" ? [r.total] : []));
+    const missing = connected.filter(([, , r]) => r.status === "error").map(([, name]) => name);
+    const total =
+      ok.length === 0
+        ? "нет данных"
+        : `<b>${nf.format(ok.reduce((a, b) => a + b, 0))}</b>` + (missing.length ? ` <i>(без ${missing.join(", ")})</i>` : "");
+    head[0] = `⬇️ Всего скачиваний: ${total} · ${dau}`;
+    for (const [icon, name, r] of connected) {
+      if (r.status !== "off") head.push(storeLine(icon, name, r, s.day));
+    }
+  }
+
+  const lines = [
+    `📱 <b>Приложение Qurany · ${day}</b>`,
+    "",
+    ...head,
+    `📅 MAU: <b>${nf.format(s.mau)}</b>` + (s.mau > 0 ? ` · DAU/MAU <b>${pct(s.dau, s.mau)}</b>` : ""),
+    `🆕 Первые открытия: <b>${nf.format(s.newInstalls)}</b> (${signed(s.newInstalls - s.prevNewInstalls)} к ${prevDay})`,
+    "",
+  ];
+
+  const top = s.features.slice(0, APP_TOP_FEATURES);
+  if (top.length === 0) {
+    lines.push(`🔥 <b>Топ-${APP_TOP_FEATURES} функций</b>: за день никто не пользовался`);
+  } else {
+    lines.push(`🔥 <b>Топ-${APP_TOP_FEATURES} функций</b> <i>(люди · доля от DAU)</i>`);
+    top.forEach((f, i) =>
+      lines.push(`${i + 1}. ${escapeHtml(f.name)} — <b>${nf.format(f.users)}</b> (${pct(f.users, s.dau)})`)
+    );
+  }
+
+  // Режимы чтения — своей строкой: в топ функций они не входят (см. APP_FEATURES).
+  if (s.modes.length > 0) {
+    const modes = s.modes
+      .map((m) => `${escapeHtml(m.name)} <b>${nf.format(m.users)}</b> (${pct(m.users, s.dau)})`)
+      .join(" · ");
+    lines.push("", `📖 <b>Режимы чтения</b>: ${modes}`);
+  }
+
+  // Пауза приложений — всегда, даже с нулями: за ней следят день за днём (см. PAUSE в app-stats).
+  const p = s.pause;
+  lines.push(
+    "",
+    `⏸ <b>Пауза приложений</b>: пользовались <b>${nf.format(p.users)}</b> · ` +
+      `вернула к чтению <b>${nf.format(p.pulled)}</b> (открытий: ${nf.format(p.pulledTimes)}) · ` +
+      `включили <b>${nf.format(p.enabled)}</b> · выключили <b>${nf.format(p.disabled)}</b>`
+  );
+
+  lines.push(
+    "",
+    "<i>Скачивания — из отчётов сторов. Первые открытия — новые установки по данным приложения; сутки по Джакарте.</i>"
+  );
+  return lines.join("\n");
+}
+
+function prevDayKey(day: string): string {
+  return new Date(Date.parse(`${day}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+}
+
+export function formatAppCaption(s: AppStats, days: number): string {
+  return (
+    `📈 <b>Приложение Qurany · ${days} дней</b>\n` +
+    `DAU и новые установки по дням · последний день ${ddmm(s.day)}`
   );
 }
 

@@ -414,6 +414,83 @@ curl "https://<домен>/api/sheet?account=qurany-app" -H "Authorization: Bear
 
 ---
 
+## Сводка по приложению Qurany
+
+После дневной пачки (тема Daily) приходит сводка по самому приложению и график за 14 дней — свой крон `/api/app-report` в 05:40 UTC (12:40 Джакарты), отдельно от `/api/report`. Отчётный день — **вчерашние календарные сутки Джакарты** (00:00–24:00), а не спринт 12:30→12:30: DAU и MAU — календарные метрики, и цифры должны сходиться с графиками PostHog.
+
+| Строка | Как считается |
+|--------|---------------|
+| DAU | уникальные установки с хотя бы одним событием за сутки |
+| MAU | то же за 30 суток, заканчивая отчётным днём; DAU/MAU — «липкость» |
+| Первые открытия | установки, чьё первое событие пришлось на эти сутки (первое открытие; не скачивания из сторов) |
+| Топ-5 функций | сколько людей пользовались функцией за сутки и доля от DAU |
+| Режимы чтения | Mushaf / Guided / Suflor отдельной строкой: открыли читалку в режиме, переключились на него, читали или слушали в нём; один человек может попасть в несколько режимов |
+| Пауза приложений | Khatam Lock + Prayer Lock отдельной строкой, всегда: «пользовались» — любое касание паузы (настройки, включение, напоминание Prayer Lock, карточка намаза в хатме, открытие с экрана паузы); «вернула к чтению» — люди (и сколько раз), открывшие Qurany с экрана паузы или нажавшие «Читать» в напоминании; «включили / выключили» — тумблер Khatam Lock и переключатель Prayer Lock. События — `PAUSE` в `lib/app-stats.ts` |
+
+Считается только `environment = production` — staging-сборки пишут в тот же проект. Человек = установка: приложение шлёт события анонимно, поэтому переустановка — новый человек.
+
+Список функций и событий, по которым их видно, — `APP_FEATURES` в `lib/app-stats.ts`. Имена событий — договор с приложением (`qurany-rn/lib/analytics.ts`, тапы в читалке — `qurany-rn/lib/reader-messages.ts`): переименуют там — строка молча обнулится здесь. Тафсир, заметка к аяту и произношение слова считаются по открытию, а не по результату.
+
+Проект PostHog приложения живёт в **другом аккаунте**, чем проект лендинга, поэтому у сводки свои id проекта и ключ (общий `POSTHOG_PERSONAL_API_KEY` получает на него 403 «You don't have access to the project»):
+
+1. Id проекта: PostHog (аккаунт приложения) → Settings → Project → **Project ID**.
+2. Ключ: там же → Settings → Account → **Personal API keys** → Create → доступ только к этому проекту, scope **Query: Read**.
+
+```bash
+vercel env add POSTHOG_APP_PROJECT_ID production
+vercel env add POSTHOG_APP_PERSONAL_API_KEY production --sensitive
+```
+
+Без них сводка берёт общие `POSTHOG_PROJECT_ID` / `POSTHOG_PERSONAL_API_KEY` лендинга. Если сводка не ушла, бот пишет в чат «⚠️ Сводка по приложению не ушла» с причиной. Ответ PostHog «Queries are a little too busy right now» (503) и другие 429/5xx бот сам повторяет с паузой (2 → 5 → 10 с), прежде чем сдаться.
+
+Перезапустить одну сводку — без повтора всего дневного отчёта (секрет Vercel подставит сам):
+
+```bash
+vercel crons run /api/app-report
+```
+
+Или напрямую: `curl "https://<домен>/api/app-report" -H "Authorization: Bearer <CRON_SECRET>"`. В ответе видно, ушла ли сводка и что стало с графиком.
+
+### Скачивания из сторов
+
+Скачивания стоят в начале сводки:
+
+```
+⬇️ Всего скачиваний: 20 210 · 👤 DAU: 603 (-181 к 05.10)
+🍏 App Store: 8 000 · +20 за 05.10 (стор отдаёт с опозданием)
+🤖 Google Play: 12 210 · +198 за 04.10 (стор отдаёт с опозданием)
+```
+
+«Всего» — за всё время, сумма по сторам; «+» — за последний готовый день стора. Сторы публикуют суточные отчёты с задержкой (App Store — около суток, Google Play — 2–3 дня), поэтому у каждого своя дата, и всего — по этот же день. Даты у сторов могут не совпадать — это нормально.
+
+- **App Store** — первые + повторные скачивания (тот же Apple ID поставил заново), как Total Downloads в App Store Connect; обновления не считаются. Готового «за всё время» Apple не отдаёт: бот складывает месячные отчёты продаж с месяца выхода (`APPSTORE_RELEASE_MONTH` в `lib/store-downloads.ts`, 08.2026) и дневные — за текущий месяц. Месячный отчёт Apple выкладывает через несколько дней после конца месяца; до этого месяц собирается из дневных. Версия отчёта у Apple своя для каждой частоты (дневной — `1_1`, месячный — `1_0`; документация отстаёт) — на 400 бот пробует другую.
+- **Google Play** — за день `Daily User Installs` (люди, впервые поставившие приложение), всего — сумма `Daily User Installs` по всем месячным файлам. Колонка `Total User Installs` в отчёте есть, но Google её больше не заполняет (нули) — на неё не опираемся.
+
+Стор без переменных в сводке не печатается вовсе — появится сам, когда заведут его переменные. Ошибка подключённого стора выводится строкой «нет данных (причина)»; остальная сводка от этого не страдает.
+
+**App Store** — App Store Connect → Users and Access → Integrations → App Store Connect API → Team Keys → ключ с ролью **Sales** (или Finance/Admin). На аккаунте разработчика несколько приложений; считается только Qurany (`APPSTORE_ID` в `lib/applink.ts`).
+
+```bash
+vercel env add ASC_ISSUER_ID production       # Issuer ID над списком ключей
+vercel env add ASC_KEY_ID production          # Key ID ключа
+vercel env add ASC_PRIVATE_KEY production < AuthKey_<KEY_ID>.p8   # содержимое .p8 (можно и одной строкой с \n)
+vercel env add ASC_VENDOR_NUMBER production   # Payments and Financial Reports → номер вендора
+```
+
+**Google Play** — бот читает месячный CSV установок из бакета отчётов Play тем же сервисным аккаунтом, что и Google-таблицу (`GOOGLE_SA_EMAIL` / `GOOGLE_SA_PRIVATE_KEY`).
+
+1. Play Console → **Users and permissions → Invite new users** → email из `GOOGLE_SA_EMAIL` (вида `…@….iam.gserviceaccount.com`).
+2. Account permissions: **View app information and download bulk reports (read-only)**. Доступ к бакету может появиться не сразу — до суток.
+3. Адрес бакета: Play Console → Download reports → Statistics → **Copy Cloud Storage URI** (`gs://pubsite_prod_<число>/stats/installs/`); в переменную идёт только имя бакета:
+
+```bash
+vercel env add PLAY_REPORTS_BUCKET production  # pubsite_prod_<число>
+```
+
+Без доступа к бакету строка Play в сводке сама подскажет, какой email пригласить.
+
+---
+
 ## Итоговый список переменных
 
 | Переменная           | Откуда взять                          |
@@ -427,6 +504,9 @@ curl "https://<домен>/api/sheet?account=qurany-app" -H "Authorization: Bear
 | `TELEGRAM_CHAT_ID`   | Шаг 2.2 — отрицательное число        |
 | `CRON_SECRET`        | Шаг 3.3 — `openssl rand -hex 32`     |
 | `BLOB_READ_WRITE_TOKEN` | Добавляется Vercel автоматически |
+| `POSTHOG_APP_PROJECT_ID` / `POSTHOG_APP_PERSONAL_API_KEY` | Сводка по приложению — id проекта и ключ (Query: Read) из аккаунта PostHog приложения (раздел «Сводка по приложению Qurany») |
+| `ASC_ISSUER_ID` / `ASC_KEY_ID` / `ASC_PRIVATE_KEY` / `ASC_VENDOR_NUMBER` | Скачивания App Store — ключ App Store Connect API с ролью Sales (раздел «Скачивания из сторов») |
+| `PLAY_REPORTS_BUCKET` | Скачивания Google Play — имя бакета отчётов Play; доступ через `GOOGLE_SA_EMAIL` (раздел «Скачивания из сторов») |
 | `FARM_TOKEN_SECRET`  | Ферма рилсов — `openssl rand -hex 32` |
 | `FARM_IG_TOKEN`      | Ферма рилсов — Page-токен, раздел «Токен публикации» |
 | `FARM_IG_ID`         | Ферма рилсов — ID Instagram-аккаунта фермы (@daristeppe: `17841413773053161`) |

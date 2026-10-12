@@ -9,6 +9,10 @@
       "schedule": "45 5 * * *"
     },
     {
+      "path": "/api/app-report",
+      "schedule": "40 5 * * *"
+    },
+    {
       "path": "/api/farm/daily",
       "schedule": "0 20 * * *"
     },

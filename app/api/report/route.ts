@@ -280,6 +280,9 @@ export async function GET(req: NextRequest) {
       } catch (e) {
         console.error("target report failed:", e);
       }
+
+      // Сводка по приложению — свой крон /api/app-report (vercel.json), не здесь: так её
+      // можно перезапустить одну, без повтора всего отчёта и без защиты от дублей выше.
     }
 
     return NextResponse.json({

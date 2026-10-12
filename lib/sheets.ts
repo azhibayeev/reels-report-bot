@@ -39,25 +39,29 @@ export function sheetsConfigured(): boolean {
 
 // Имена вкладок зависят от аккаунта и живут в lib/accounts.ts (reelsTabOf/historyTabOf).
 
-export function buildJwtClaim(email: string, nowSec: number): JwtClaim {
-  return { iss: email, scope: SCOPE, aud: TOKEN_URL, exp: nowSec + 3600, iat: nowSec };
+// scope — по умолчанию Sheets; тот же сервисный аккаунт читает и бакет отчётов Play
+// (lib/store-downloads.ts) со своим scope.
+export function buildJwtClaim(email: string, nowSec: number, scope = SCOPE): JwtClaim {
+  return { iss: email, scope, aud: TOKEN_URL, exp: nowSec + 3600, iat: nowSec };
 }
 
 const b64url = (v: string | Buffer): string => Buffer.from(v).toString("base64url");
 
-export function signJwt(creds: SaCreds, nowSec: number): string {
+export function signJwt(creds: SaCreds, nowSec: number, scope = SCOPE): string {
   const input =
     `${b64url(JSON.stringify({ alg: "RS256", typ: "JWT" }))}.` +
-    b64url(JSON.stringify(buildJwtClaim(creds.email, nowSec)));
+    b64url(JSON.stringify(buildJwtClaim(creds.email, nowSec, scope)));
   const sig = createSign("RSA-SHA256").update(input).end().sign(creds.privateKey);
   return `${input}.${b64url(sig)}`;
 }
 
 // Access token живёт час; держим в памяти модуля, чтобы не подписывать JWT на каждый вызов.
-let cached: { token: string; expiresAtMs: number } | null = null;
+// Свой токен на каждый scope.
+const cached = new Map<string, { token: string; expiresAtMs: number }>();
 
-export async function getAccessToken(): Promise<string> {
-  if (cached && cached.expiresAtMs > Date.now() + 60_000) return cached.token;
+export async function getAccessToken(scope = SCOPE): Promise<string> {
+  const hit = cached.get(scope);
+  if (hit && hit.expiresAtMs > Date.now() + 60_000) return hit.token;
 
   const nowSec = Math.floor(Date.now() / 1000);
   const res = await fetch(TOKEN_URL, {
@@ -65,15 +69,15 @@ export async function getAccessToken(): Promise<string> {
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-      assertion: signJwt(loadCreds(), nowSec),
+      assertion: signJwt(loadCreds(), nowSec, scope),
     }).toString(),
   });
   if (!res.ok) throw new Error(`Google OAuth failed (${res.status}): ${await res.text()}`);
   const j = (await res.json()) as { access_token?: string; expires_in?: number };
   if (!j.access_token) throw new Error("Google OAuth: пустой access_token");
 
-  cached = { token: j.access_token, expiresAtMs: Date.now() + (j.expires_in ?? 3600) * 1000 };
-  return cached.token;
+  cached.set(scope, { token: j.access_token, expiresAtMs: Date.now() + (j.expires_in ?? 3600) * 1000 });
+  return j.access_token;
 }
 
 async function api(path: string, init?: RequestInit): Promise<unknown> {
