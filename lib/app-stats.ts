@@ -49,16 +49,8 @@ export const APP_FEATURES: ReadonlyArray<{ name: string; when: string }> = [
     name: "Хатм",
     when: "event IN ('day_marked_read', 'khatam_created', 'khatam_joined', 'khatam_started', 'khatam_completed')",
   },
-  // Режимы чтения (Mushaf / Guided / Suflor) здесь намеренно нет: у них своя строка
-  // в сводке — см. READER_MODES ниже.
-  {
-    // Khatam Lock + Prayer Lock одной строкой: включили, открыли настройки или
-    // упёрлись в экран заблокированного приложения.
-    name: "Пауза приложений",
-    when:
-      "event IN ('focus_lock_enabled', 'shield_opened') OR " +
-      "(event = 'screen_viewed' AND properties.screen IN ('focus_lock', 'prayer_lock', 'blocked'))",
-  },
+  // Режимов чтения (Mushaf / Guided / Suflor) и паузы приложений здесь намеренно нет:
+  // у них свои строки в сводке — см. READER_MODES и PAUSE ниже.
   { name: "Виджеты", when: "event = 'widget_opened'" },
   { name: "Настроение", when: "event = 'mood_selected'" },
   { name: "Поиск", when: "event = 'search_performed'" },
@@ -74,6 +66,33 @@ export const APP_FEATURES: ReadonlyArray<{ name: string; when: string }> = [
  */
 const READER_MODES: Record<string, string> = { mushaf: "Mushaf", guided: "Guided", suflor: "Suflor" };
 const MODE_EVENTS = "event IN ('reader_opened', 'reader_mode_changed', 'reading_started', 'audio_started')";
+
+/**
+ * Пауза приложений = Khatam Lock (старый экран focus_lock) + Prayer Lock. Своя строка,
+ * всегда, даже с нулями — команда за ней следит. Экрана `blocked` здесь нет: это список
+ * заблокированных участников хатма, а не заблокированные приложения.
+ *
+ * - пользовались — любое касание паузы: настройки, включение, напоминание Prayer Lock
+ *   (Читать / Wallahi / отложить), карточка намаза в хатме, открытие с экрана паузы;
+ * - вернула к чтению — Open Qurany на экране паузы (shield_opened) или «Читать» в
+ *   напоминании Prayer Lock (prayer_task_go_read);
+ * - включили / выключили — тумблер Khatam Lock и переключатель Prayer Lock в хатме.
+ */
+const PAUSE = {
+  any:
+    "(event IN ('focus_lock_enabled', 'shield_opened') OR " +
+    "(event = 'screen_viewed' AND properties.screen IN ('focus_lock', 'prayer_lock')) OR " +
+    "(event = 'ui_tapped' AND (properties.screen IN ('focus_lock', 'prayer_lock') OR " +
+    "properties.element IN ('focus_lock', 'prayer_lock') OR properties.element LIKE 'prayer_lock_%' OR " +
+    "properties.element LIKE 'prayer_task_%' OR properties.element LIKE 'prayer_hero_%')))",
+  pulled: "(event = 'shield_opened' OR (event = 'ui_tapped' AND properties.element = 'prayer_task_go_read'))",
+  enabled:
+    "((event = 'focus_lock_enabled' AND properties.enabled = true) OR " +
+    "(event = 'ui_tapped' AND properties.element = 'prayer_lock_on'))",
+  disabled:
+    "((event = 'focus_lock_enabled' AND properties.enabled = false) OR " +
+    "(event = 'ui_tapped' AND properties.element = 'prayer_lock_off'))",
+};
 
 /** Метка функции для события прямо в HogQL; '' — событие не функция. */
 export function featureLabelSql(): string {
@@ -101,6 +120,8 @@ export interface AppStats {
   features: FeatureUsage[];
   /** Режимы чтения за день (Mushaf / Guided / Suflor), по убыванию людей. */
   modes: FeatureUsage[];
+  /** Пауза приложений за день — см. PAUSE. Всё в людях, кроме pulledTimes. */
+  pause: { users: number; pulled: number; pulledTimes: number; enabled: number; disabled: number };
   /** Ряды за APP_SERIES_DAYS суток, заканчивая отчётным днём; дни без событий — 0. */
   dauSeries: DayPoint[];
   installSeries: DayPoint[];
@@ -139,7 +160,7 @@ export async function getAppStats(now: Date): Promise<AppStats> {
   const seriesFrom = to - APP_SERIES_DAYS * DAY_S;
   const jakartaDay = (col: string) => `toDate(toTimeZone(${col}, 'Asia/Jakarta'))`;
 
-  const [dauRows, installRows, mauRows, featureRows, modeRows] = await Promise.all([
+  const [dauRows, installRows, mauRows, featureRows, modeRows, pauseRows] = await Promise.all([
     q(
       `SELECT ${jakartaDay("timestamp")} AS d, uniqIf(distinct_id, ${PROD}) AS u FROM events ` +
         `WHERE ${at(seriesFrom, to)} GROUP BY d ORDER BY d`
@@ -159,6 +180,11 @@ export async function getAppStats(now: Date): Promise<AppStats> {
     q(
       `SELECT properties.mode AS m, uniqIf(distinct_id, ${PROD}) AS u FROM events ` +
         `WHERE ${at(from, to)} AND ${MODE_EVENTS} GROUP BY m`
+    ),
+    q(
+      `SELECT uniqIf(distinct_id, ${PROD} AND ${PAUSE.any}), uniqIf(distinct_id, ${PROD} AND ${PAUSE.pulled}), ` +
+        `countIf(${PROD} AND ${PAUSE.pulled}), uniqIf(distinct_id, ${PROD} AND ${PAUSE.enabled}), ` +
+        `uniqIf(distinct_id, ${PROD} AND ${PAUSE.disabled}) FROM events WHERE ${at(from, to)}`
     ),
   ]);
 
@@ -186,6 +212,13 @@ export async function getAppStats(now: Date): Promise<AppStats> {
     prevNewInstalls: last(installSeries, 1),
     features,
     modes,
+    pause: {
+      users: N(pauseRows[0]?.[0]),
+      pulled: N(pauseRows[0]?.[1]),
+      pulledTimes: N(pauseRows[0]?.[2]),
+      enabled: N(pauseRows[0]?.[3]),
+      disabled: N(pauseRows[0]?.[4]),
+    },
     dauSeries,
     installSeries,
   };

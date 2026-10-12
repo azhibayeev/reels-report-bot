@@ -95,6 +95,23 @@ const APPSTORE_RELEASE_MONTH = "2026-08";
 
 type AscUnits = (frequency: "DAILY" | "MONTHLY", reportDate: string) => Promise<number | null>;
 
+// Версия отчёта продаж у Apple своя для каждой частоты, и документация отстаёт: дневной
+// с 2024 г. принимает только 1_1, а месячный с 1_1 Apple отверг 12.10 (400
+// PARAMETER_ERROR.INVALID). Первой идёт рабочая версия, на 400 пробуем другую.
+const ASC_VERSIONS: Record<"DAILY" | "MONTHLY", string[]> = { DAILY: ["1_1", "1_0"], MONTHLY: ["1_0", "1_1"] };
+
+/** Причина отказа Apple одной строкой: detail первой ошибки из JSON, иначе начало тела. */
+async function ascError(res: Response): Promise<string> {
+  const body = await res.text();
+  try {
+    const e = (JSON.parse(body) as { errors?: Array<{ code?: string; title?: string; detail?: string }> }).errors?.[0];
+    if (e) return [e.code, e.detail ?? e.title].filter(Boolean).join(": ");
+  } catch {
+    // не JSON — ниже начало тела
+  }
+  return body.replace(/\s+/g, " ").slice(0, 200);
+}
+
 /**
  * Скачивания Qurany (первые + повторные) из одного отчёта продаж; null — отчёта нет (404:
  * Apple его ещё не выложил или в тот день у аккаунта не было ни одной продажи). Любой
@@ -102,21 +119,29 @@ type AscUnits = (frequency: "DAILY" | "MONTHLY", reportDate: string) => Promise<
  */
 function ascUnits(c: NonNullable<ReturnType<typeof ascConfig>>, jwt: string): AscUnits {
   return async (frequency, reportDate) => {
-    const url = new URL("https://api.appstoreconnect.apple.com/v1/salesReports");
-    url.searchParams.set("filter[frequency]", frequency);
-    url.searchParams.set("filter[reportType]", "SALES");
-    url.searchParams.set("filter[reportSubType]", "SUMMARY");
-    url.searchParams.set("filter[vendorNumber]", c.vendor);
-    url.searchParams.set("filter[reportDate]", reportDate);
-    url.searchParams.set("filter[version]", "1_1");
+    let rejected = "";
+    for (const version of ASC_VERSIONS[frequency]) {
+      const url = new URL("https://api.appstoreconnect.apple.com/v1/salesReports");
+      url.searchParams.set("filter[frequency]", frequency);
+      url.searchParams.set("filter[reportType]", "SALES");
+      url.searchParams.set("filter[reportSubType]", "SUMMARY");
+      url.searchParams.set("filter[vendorNumber]", c.vendor);
+      url.searchParams.set("filter[reportDate]", reportDate);
+      url.searchParams.set("filter[version]", version);
 
-    const res = await fetch(url.toString(), {
-      headers: { Authorization: `Bearer ${jwt}`, Accept: "application/a-gzip" },
-    });
-    if (res.status === 404) return null;
-    if (!res.ok) throw new Error(`App Store Connect ${res.status}: ${(await res.text()).slice(0, 200)}`);
-    const { downloads, redownloads } = parseAppStoreReport(gunzipSync(Buffer.from(await res.arrayBuffer())).toString("utf8"));
-    return downloads + redownloads;
+      const res = await fetch(url.toString(), {
+        headers: { Authorization: `Bearer ${jwt}`, Accept: "application/a-gzip" },
+      });
+      if (res.status === 404) return null;
+      if (res.status === 400) {
+        rejected = await ascError(res);
+        continue;
+      }
+      if (!res.ok) throw new Error(`App Store Connect ${res.status} (${frequency} ${reportDate}): ${await ascError(res)}`);
+      const { downloads, redownloads } = parseAppStoreReport(gunzipSync(Buffer.from(await res.arrayBuffer())).toString("utf8"));
+      return downloads + redownloads;
+    }
+    throw new Error(`App Store Connect 400 (${frequency} ${reportDate}): ${rejected}`);
   };
 }
 
@@ -183,8 +208,8 @@ function decode(buf: Buffer): string {
   return buf.toString("utf8").replace(/^﻿/, "");
 }
 
-/** Строки месячного CSV установок по датам: Daily User Installs и Total User Installs. */
-function playInstallRows(buf: Buffer): Array<{ date: string; day: number; total: number | null }> {
+/** Строки месячного CSV установок по датам: Daily User Installs за каждый день. */
+function playInstallRows(buf: Buffer): Array<{ date: string; day: number }> {
   const lines = decode(buf)
     .split(/\r?\n/)
     .filter((l) => l.trim() !== "")
@@ -192,27 +217,21 @@ function playInstallRows(buf: Buffer): Array<{ date: string; day: number; total:
   const [header, ...rows] = lines;
   const dateCol = header.indexOf("Date");
   const installsCol = header.indexOf("Daily User Installs");
-  const totalCol = header.indexOf("Total User Installs");
   if (dateCol < 0 || installsCol < 0) {
     throw new Error(`в отчёте Play нет колонок Date / Daily User Installs: ${header.join(", ")}`);
   }
   return rows
     .filter((r) => /^\d{4}-\d{2}-\d{2}$/.test(r[dateCol]))
     .sort((a, b) => (a[dateCol] < b[dateCol] ? -1 : 1))
-    .map((r) => ({
-      date: r[dateCol],
-      day: Number(r[installsCol]) || 0,
-      total: totalCol >= 0 && r[totalCol] !== "" && Number.isFinite(Number(r[totalCol])) ? Number(r[totalCol]) : null,
-    }));
+    .map((r) => ({ date: r[dateCol], day: Number(r[installsCol]) || 0 }));
 }
 
 /**
- * Месячный CSV установок → последний день в файле. За день — Daily User Installs: люди,
- * впервые поставившие приложение. Всего — Total User Installs того же дня (уникальные
- * люди за всё время); нет колонки — null, итог соберут суммой по всем месяцам.
- * Пустой файл (начало месяца) — null: вызывающий берёт прошлый месяц.
+ * Месячный CSV установок → последний день в файле и Daily User Installs за него: люди,
+ * впервые поставившие приложение. Пустой файл (начало месяца) — null: вызывающий берёт
+ * прошлый месяц.
  */
-export function parsePlayInstallsCsv(buf: Buffer): { date: string; day: number; total: number | null } | null {
+export function parsePlayInstallsCsv(buf: Buffer): { date: string; day: number } | null {
   return playInstallRows(buf).at(-1) ?? null;
 }
 
@@ -237,7 +256,11 @@ async function gcsObject(bucket: string, token: string, name: string): Promise<B
   return Buffer.from(await res.arrayBuffer());
 }
 
-/** Всего установок без Total User Installs: Daily User Installs по всем месячным файлам. */
+/**
+ * Всего установок за всё время — сумма Daily User Installs по всем месячным файлам.
+ * Колонка Total User Installs в отчёте есть, но Google её больше не заполняет (в живом
+ * отчёте 12.10 — нули).
+ */
 async function sumPlayUserInstalls(bucket: string, token: string): Promise<number> {
   const res = await fetch(
     `https://storage.googleapis.com/storage/v1/b/${bucket}/o?prefix=${encodeURIComponent(PLAY_INSTALLS_PREFIX)}&maxResults=1000`,
@@ -262,8 +285,7 @@ export async function getPlayDownloads(now: Date): Promise<StoreResult> {
       const file = await gcsObject(bucket, token, `${PLAY_INSTALLS_PREFIX}${month}_overview.csv`);
       const last = file && parsePlayInstallsCsv(file);
       if (!last) continue;
-      const total = last.total ?? (await sumPlayUserInstalls(bucket, token));
-      return { status: "ok", date: last.date, day: last.day, total };
+      return { status: "ok", ...last, total: await sumPlayUserInstalls(bucket, token) };
     }
     throw new Error("в отчётах Play за этот и прошлый месяц нет ни одного дня");
   } catch (e) {

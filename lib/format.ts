@@ -251,6 +251,15 @@ export function formatAppMessage(s: AppStats, stores?: StoreDownloads): string {
     lines.push("", `📖 <b>Режимы чтения</b>: ${modes}`);
   }
 
+  // Пауза приложений — всегда, даже с нулями: за ней следят день за днём (см. PAUSE в app-stats).
+  const p = s.pause;
+  lines.push(
+    "",
+    `⏸ <b>Пауза приложений</b>: пользовались <b>${nf.format(p.users)}</b> · ` +
+      `вернула к чтению <b>${nf.format(p.pulled)}</b> (открытий: ${nf.format(p.pulledTimes)}) · ` +
+      `включили <b>${nf.format(p.enabled)}</b> · выключили <b>${nf.format(p.disabled)}</b>`
+  );
+
   lines.push(
     "",
     "<i>Скачивания — из отчётов сторов. Первые открытия — новые установки по данным приложения; сутки по Джакарте.</i>"

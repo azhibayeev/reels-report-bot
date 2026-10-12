@@ -20,6 +20,7 @@ const stats = (over: Partial<AppStats> = {}): AppStats => ({
     { name: "Поиск", users: 12 },
   ],
   modes: [],
+  pause: { users: 0, pulled: 0, pulledTimes: 0, enabled: 0, disabled: 0 },
   dauSeries: [],
   installSeries: [],
   ...over,
@@ -67,6 +68,14 @@ describe("сообщение по приложению", () => {
       })
     );
     expect(m).toContain("📖 <b>Режимы чтения</b>: Guided <b>420</b> (54%) · Mushaf <b>348</b> (45%) · Suflor <b>48</b> (6%)");
+  });
+
+  it("пауза приложений — своей строкой всегда, даже с нулями", () => {
+    const m = formatAppMessage(stats({ pause: { users: 11, pulled: 7, pulledTimes: 13, enabled: 1, disabled: 0 } }));
+    expect(m).toContain(
+      "⏸ <b>Пауза приложений</b>: пользовались <b>11</b> · вернула к чтению <b>7</b> (открытий: 13) · включили <b>1</b> · выключили <b>0</b>"
+    );
+    expect(formatAppMessage(stats())).toContain("⏸ <b>Пауза приложений</b>: пользовались <b>0</b>");
   });
 
   it("без чтения за день строки режимов нет", () => {

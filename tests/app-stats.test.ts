@@ -27,13 +27,18 @@ describe("featureLabelSql", () => {
 
   it("включает функции из читалки, про которые спрашивали", () => {
     const names = APP_FEATURES.map((f) => f.name);
-    for (const n of ["Тафсир", "Заметка к аяту", "Поделиться аятом", "Произношение слова", "Пауза приложений"]) {
+    for (const n of ["Тафсир", "Заметка к аяту", "Поделиться аятом", "Произношение слова"]) {
       expect(names).toContain(n);
     }
   });
 
   it("режимы не дублируются среди функций — у них своя строка", () => {
     expect(APP_FEATURES.map((f) => f.name).join(" ")).not.toMatch(/Guided|Suflor|Mushaf/);
+  });
+
+  it("пауза приложений не среди функций — у неё своя строка", () => {
+    expect(APP_FEATURES.map((f) => f.name)).not.toContain("Пауза приложений");
+    expect(featureLabelSql()).not.toContain("shield_opened");
   });
 
   it("названия не ломают строковый литерал HogQL", () => {
@@ -64,6 +69,8 @@ describe("getAppStats", () => {
         if (q.includes("minIf(")) {
           // Новые установки: 03.10 — 5, 04.10 — 9.
           results = [["2026-10-03", 5], ["2026-10-04", 9]];
+        } else if (q.includes("shield_opened")) {
+          results = [[11, 7, 13, 1, 0]]; // пауза: люди, вернула к чтению (люди, раз), вкл, выкл
         } else if (q.includes("multiIf(")) {
           results = [["", 999], ["Аудио", 40], ["Чтение", 120], ["Тафсир", 40], ["Хатм", 75]];
         } else if (q.includes("properties.mode AS m")) {
@@ -114,6 +121,19 @@ describe("getAppStats", () => {
       { name: "Mushaf", users: 90 },
       { name: "Suflor", users: 12 },
     ]);
+  });
+
+  it("пауза приложений: люди, вернула к чтению (люди и раз), включили, выключили", async () => {
+    const s = await getAppStats(NOW);
+    expect(s.pause).toEqual({ users: 11, pulled: 7, pulledTimes: 13, enabled: 1, disabled: 0 });
+    const q = queries.find((x) => x.includes("shield_opened")) as string;
+    // Khatam Lock и Prayer Lock: «вернула к чтению» — Open Qurany на экране паузы или
+    // «Читать» в напоминании Prayer Lock.
+    expect(q).toContain("prayer_task_go_read");
+    expect(q).toContain("prayer_lock_on");
+    expect(q).toContain("focus_lock_enabled");
+    // Экран blocked в приложении — заблокированные участники хатма, не приложения.
+    expect(q).not.toContain("'blocked'");
   });
 
   it("ряды за 14 дней без дыр: нет событий за день — ноль", async () => {
