@@ -36,7 +36,11 @@ export async function notifyAppReportFailure(e: unknown): Promise<void> {
 export async function sendAppReport(now: Date): Promise<AppReportResult> {
   // Сторы не бросают: сбой или отсутствие ключей становится строкой в сообщении.
   const [stats, stores] = await Promise.all([getAppStats(now), getStoreDownloads(now)]);
-  await sendMessage(formatAppMessage(stats, stores));
+  const text = formatAppMessage(stats, stores);
+  await sendMessage(text);
+  // Копия в лог Vercel: проверить прогон (`vercel crons run`) без доступа к чату.
+  // Ошибка стора не роняет крон (200), а видна только в тексте.
+  console.log(`app report sent:\n${text}`);
 
   let chart: string;
   try {
