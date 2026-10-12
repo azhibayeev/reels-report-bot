@@ -3,6 +3,7 @@
 // Сторы публикуют суточные отчёты с задержкой: App Store — примерно сутки, Google Play —
 // двое-трое. Поэтому каждый стор отдаёт ПОСЛЕДНИЙ ГОТОВЫЙ день со своей датой, а не
 // «вчера»: сообщение обязано назвать эту дату, иначе цифра читается как вчерашняя.
+// Рядом — всего скачиваний за всё время по этот же день.
 //
 // App Store: Sales and Trends (SALES / SUMMARY / DAILY) через App Store Connect API.
 // Google Play: месячный CSV установок в бакете отчётов Play (Cloud Storage).
@@ -12,8 +13,9 @@ import { gunzipSync } from "node:zlib";
 import { APPSTORE_ID, PLAY_PACKAGE } from "./applink";
 import { getAccessToken } from "./sheets";
 
+// day — скачивания за день date; total — за всё время по date включительно.
 export type StoreResult =
-  | { status: "ok"; date: string; downloads: number; redownloads?: number }
+  | { status: "ok"; date: string; day: number; total: number }
   | { status: "off" }
   | { status: "error"; message: string };
 
@@ -87,33 +89,83 @@ export function ascJwt(nowSec: number): string {
   return `${input}.${b64url(sig)}`;
 }
 
+// Qurany вышел в App Store 18.08.2026 (releaseDate в itunes.apple.com/lookup). Готового
+// «всего за всё время» Apple не отдаёт — итог складывается из отчётов продаж с этого месяца.
+const APPSTORE_RELEASE_MONTH = "2026-08";
+
+type AscUnits = (frequency: "DAILY" | "MONTHLY", reportDate: string) => Promise<number | null>;
+
 /**
- * Последний готовый день: идём назад от вчера (UTC), пока Apple отвечает 404 —
- * «отчёта за этот день ещё нет». Любой другой отказ (ключ, права) — сразу ошибка:
- * искать дальше бессмысленно.
+ * Скачивания Qurany (первые + повторные) из одного отчёта продаж; null — отчёта нет (404:
+ * Apple его ещё не выложил или в тот день у аккаунта не было ни одной продажи). Любой
+ * другой отказ (ключ, права) — ошибка: искать дальше бессмысленно.
+ */
+function ascUnits(c: NonNullable<ReturnType<typeof ascConfig>>, jwt: string): AscUnits {
+  return async (frequency, reportDate) => {
+    const url = new URL("https://api.appstoreconnect.apple.com/v1/salesReports");
+    url.searchParams.set("filter[frequency]", frequency);
+    url.searchParams.set("filter[reportType]", "SALES");
+    url.searchParams.set("filter[reportSubType]", "SUMMARY");
+    url.searchParams.set("filter[vendorNumber]", c.vendor);
+    url.searchParams.set("filter[reportDate]", reportDate);
+    url.searchParams.set("filter[version]", "1_1");
+
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${jwt}`, Accept: "application/a-gzip" },
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`App Store Connect ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const { downloads, redownloads } = parseAppStoreReport(gunzipSync(Buffer.from(await res.arrayBuffer())).toString("utf8"));
+    return downloads + redownloads;
+  };
+}
+
+const sum = (xs: Array<number | null>): number => xs.reduce<number>((a, x) => a + (x ?? 0), 0);
+
+/** Дни месяца "YYYY-MM" с 1-го по last включительно (по умолчанию — до конца месяца). */
+function daysOf(month: string, last?: number): string[] {
+  const [y, m] = month.split("-").map(Number);
+  const n = last ?? new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return Array.from({ length: n }, (_, i) => `${month}-${String(i + 1).padStart(2, "0")}`);
+}
+
+/** Месяцы "YYYY-MM" от from включительно до to не включая. */
+function monthsBetween(from: string, to: string): string[] {
+  const out: string[] = [];
+  const d = new Date(`${from}-01T00:00:00Z`);
+  for (let key = from; key < to; key = d.toISOString().slice(0, 7)) {
+    out.push(key);
+    d.setUTCMonth(d.getUTCMonth() + 1);
+  }
+  return out;
+}
+
+/** Закрытый месяц: месячный отчёт, а пока Apple его не выложил (первые дни) — сумма дневных. */
+async function monthUnits(units: AscUnits, month: string): Promise<number> {
+  const n = await units("MONTHLY", month);
+  return n ?? sum(await Promise.all(daysOf(month).map((d) => units("DAILY", d))));
+}
+
+/**
+ * Последний готовый день — идём назад от вчера (UTC), пока Apple отвечает 404. Всего —
+ * закрытые месяцы с выхода месячными отчётами + дни текущего месяца по этот день.
  */
 export async function getAppStoreDownloads(now: Date): Promise<StoreResult> {
   const c = ascConfig();
   if (!c) return { status: "off" };
   try {
-    const jwt = ascJwt(Math.floor(now.getTime() / 1000));
+    const units = ascUnits(c, ascJwt(Math.floor(now.getTime() / 1000)));
     for (let back = 1; back <= MAX_LOOKBACK_DAYS; back++) {
       const date = new Date(now.getTime() - back * 86_400_000).toISOString().slice(0, 10);
-      const url = new URL("https://api.appstoreconnect.apple.com/v1/salesReports");
-      url.searchParams.set("filter[frequency]", "DAILY");
-      url.searchParams.set("filter[reportType]", "SALES");
-      url.searchParams.set("filter[reportSubType]", "SUMMARY");
-      url.searchParams.set("filter[vendorNumber]", c.vendor);
-      url.searchParams.set("filter[reportDate]", date);
-      url.searchParams.set("filter[version]", "1_1");
+      const day = await units("DAILY", date);
+      if (day === null) continue;
 
-      const res = await fetch(url.toString(), {
-        headers: { Authorization: `Bearer ${jwt}`, Accept: "application/a-gzip" },
-      });
-      if (res.status === 404) continue;
-      if (!res.ok) throw new Error(`App Store Connect ${res.status}: ${(await res.text()).slice(0, 200)}`);
-      const tsv = gunzipSync(Buffer.from(await res.arrayBuffer())).toString("utf8");
-      return { status: "ok", date, ...parseAppStoreReport(tsv) };
+      const month = date.slice(0, 7);
+      const [closed, earlierDays] = await Promise.all([
+        Promise.all(monthsBetween(APPSTORE_RELEASE_MONTH, month).map((m) => monthUnits(units, m))),
+        Promise.all(daysOf(month, Number(date.slice(8)) - 1).map((d) => units("DAILY", d))),
+      ]);
+      return { status: "ok", date, day, total: sum(closed) + sum(earlierDays) + day };
     }
     throw new Error(`нет готового отчёта за последние ${MAX_LOOKBACK_DAYS} дней`);
   } catch (e) {
@@ -131,12 +183,8 @@ function decode(buf: Buffer): string {
   return buf.toString("utf8").replace(/^﻿/, "");
 }
 
-/**
- * Месячный CSV установок → последний день в файле. «Скачивания» = Daily User Installs:
- * люди, впервые поставившие приложение, — пара к первым скачиваниям App Store.
- * Пустой файл (начало месяца) — null: вызывающий берёт прошлый месяц.
- */
-export function parsePlayInstallsCsv(buf: Buffer): { date: string; downloads: number } | null {
+/** Строки месячного CSV установок по датам: Daily User Installs и Total User Installs. */
+function playInstallRows(buf: Buffer): Array<{ date: string; day: number; total: number | null }> {
   const lines = decode(buf)
     .split(/\r?\n/)
     .filter((l) => l.trim() !== "")
@@ -144,14 +192,64 @@ export function parsePlayInstallsCsv(buf: Buffer): { date: string; downloads: nu
   const [header, ...rows] = lines;
   const dateCol = header.indexOf("Date");
   const installsCol = header.indexOf("Daily User Installs");
+  const totalCol = header.indexOf("Total User Installs");
   if (dateCol < 0 || installsCol < 0) {
     throw new Error(`в отчёте Play нет колонок Date / Daily User Installs: ${header.join(", ")}`);
   }
-  const last = rows.filter((r) => /^\d{4}-\d{2}-\d{2}$/.test(r[dateCol])).sort((a, b) => (a[dateCol] < b[dateCol] ? -1 : 1)).at(-1);
-  return last ? { date: last[dateCol], downloads: Number(last[installsCol]) || 0 } : null;
+  return rows
+    .filter((r) => /^\d{4}-\d{2}-\d{2}$/.test(r[dateCol]))
+    .sort((a, b) => (a[dateCol] < b[dateCol] ? -1 : 1))
+    .map((r) => ({
+      date: r[dateCol],
+      day: Number(r[installsCol]) || 0,
+      total: totalCol >= 0 && r[totalCol] !== "" && Number.isFinite(Number(r[totalCol])) ? Number(r[totalCol]) : null,
+    }));
+}
+
+/**
+ * Месячный CSV установок → последний день в файле. За день — Daily User Installs: люди,
+ * впервые поставившие приложение. Всего — Total User Installs того же дня (уникальные
+ * люди за всё время); нет колонки — null, итог соберут суммой по всем месяцам.
+ * Пустой файл (начало месяца) — null: вызывающий берёт прошлый месяц.
+ */
+export function parsePlayInstallsCsv(buf: Buffer): { date: string; day: number; total: number | null } | null {
+  return playInstallRows(buf).at(-1) ?? null;
 }
 
 const yyyymm = (d: Date): string => d.toISOString().slice(0, 7).replace("-", "");
+
+const PLAY_INSTALLS_PREFIX = `stats/installs/installs_${PLAY_PACKAGE}_`;
+
+/** Файл бакета Play; null — такого нет (404). */
+async function gcsObject(bucket: string, token: string, name: string): Promise<Buffer | null> {
+  const res = await fetch(
+    `https://storage.googleapis.com/storage/v1/b/${bucket}/o/${encodeURIComponent(name)}?alt=media`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (res.status === 404) return null;
+  if (res.status === 401 || res.status === 403) {
+    throw new Error(
+      `нет доступа к бакету ${bucket} (${res.status}): пригласите ${process.env.GOOGLE_SA_EMAIL} в Play Console ` +
+        "с правом «View app information and download bulk reports»"
+    );
+  }
+  if (!res.ok) throw new Error(`Cloud Storage ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  return Buffer.from(await res.arrayBuffer());
+}
+
+/** Всего установок без Total User Installs: Daily User Installs по всем месячным файлам. */
+async function sumPlayUserInstalls(bucket: string, token: string): Promise<number> {
+  const res = await fetch(
+    `https://storage.googleapis.com/storage/v1/b/${bucket}/o?prefix=${encodeURIComponent(PLAY_INSTALLS_PREFIX)}&maxResults=1000`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (!res.ok) throw new Error(`Cloud Storage ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const { items = [] } = (await res.json()) as { items?: Array<{ name: string }> };
+  const files = await Promise.all(
+    items.filter((o) => o.name.endsWith("_overview.csv")).map((o) => gcsObject(bucket, token, o.name))
+  );
+  return sum(files.flatMap((f) => (f ? playInstallRows(f).map((r) => r.day) : [])));
+}
 
 export async function getPlayDownloads(now: Date): Promise<StoreResult> {
   const bucket = process.env.PLAY_REPORTS_BUCKET;
@@ -161,21 +259,11 @@ export async function getPlayDownloads(now: Date): Promise<StoreResult> {
     // Текущий месяц, а в первые дни, пока в его файле пусто, — прошлый.
     const prevMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
     for (const month of [yyyymm(now), yyyymm(prevMonth)]) {
-      const name = `stats/installs/installs_${PLAY_PACKAGE}_${month}_overview.csv`;
-      const res = await fetch(
-        `https://storage.googleapis.com/storage/v1/b/${bucket}/o/${encodeURIComponent(name)}?alt=media`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      if (res.status === 404) continue;
-      if (res.status === 401 || res.status === 403) {
-        throw new Error(
-          `нет доступа к бакету ${bucket} (${res.status}): пригласите ${process.env.GOOGLE_SA_EMAIL} в Play Console ` +
-            "с правом «View app information and download bulk reports»"
-        );
-      }
-      if (!res.ok) throw new Error(`Cloud Storage ${res.status}: ${(await res.text()).slice(0, 200)}`);
-      const day = parsePlayInstallsCsv(Buffer.from(await res.arrayBuffer()));
-      if (day) return { status: "ok", ...day };
+      const file = await gcsObject(bucket, token, `${PLAY_INSTALLS_PREFIX}${month}_overview.csv`);
+      const last = file && parsePlayInstallsCsv(file);
+      if (!last) continue;
+      const total = last.total ?? (await sumPlayUserInstalls(bucket, token));
+      return { status: "ok", date: last.date, day: last.day, total };
     }
     throw new Error("в отчётах Play за этот и прошлый месяц нет ни одного дня");
   } catch (e) {

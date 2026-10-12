@@ -33,7 +33,7 @@ describe("сообщение по приложению", () => {
     expect(m).toContain(`DAU: <b>${nf.format(1234)}</b> (+54 к 03.10)`);
     expect(m).toContain(`MAU: <b>${nf.format(9876)}</b>`);
     expect(m).toContain("DAU/MAU <b>12%</b>");
-    expect(m).toContain("Новые установки: <b>87</b> (-3 к 03.10)");
+    expect(m).toContain("Первые открытия: <b>87</b> (-3 к 03.10)");
   });
 
   it("показывает ровно пять функций с долей от DAU", () => {
@@ -80,39 +80,48 @@ describe("сообщение по приложению", () => {
 });
 
 describe("скачивания из сторов в сообщении", () => {
-  it("каждый стор — со своей датой отчёта и пометкой, что это последний готовый день", () => {
-    const m = formatAppMessage(stats(), {
-      appStore: { status: "ok", date: "2026-10-03", downloads: 7, redownloads: 5 },
-      play: { status: "ok", date: "2026-10-02", downloads: 198 },
-    });
+  // Отчётный день сводки — 04.10; сторы запаздывают: App Store готов по 03.10, Play — по 02.10.
+  const both = {
+    appStore: { status: "ok", date: "2026-10-03", day: 12, total: 8000 },
+    play: { status: "ok", date: "2026-10-02", day: 198, total: 12210 },
+  } as const;
 
-    expect(m).toContain("последний готовый отчёт");
-    // App Store: всего = первые + повторные (Total Downloads в App Store Connect).
-    expect(m).toContain("App Store: <b>12</b> скачиваний (7 новых + 5 повторных) · отчёт за 03.10");
-    expect(m).toContain("Google Play: <b>198</b> новых · отчёт за 02.10");
+  it("первая строка — всего скачиваний за всё время рядом с DAU", () => {
+    const m = formatAppMessage(stats(), both);
+    expect(m).toContain(`⬇️ Всего скачиваний: <b>${nf.format(20210)}</b> · 👤 DAU: <b>${nf.format(1234)}</b> (+54 к 03.10)`);
   });
 
-  it("без повторных — итог без разбивки", () => {
-    const m = formatAppMessage(stats(), {
-      appStore: { status: "ok", date: "2026-10-03", downloads: 7, redownloads: 0 },
-      play: { status: "off" },
-    });
-    expect(m).toContain("App Store: <b>7</b> скачиваний · отчёт за 03.10");
+  it("по стору — всего и «+» за его последний готовый день, опоздание помечено", () => {
+    const m = formatAppMessage(stats(), both);
+    expect(m).toContain(`🍏 App Store: <b>${nf.format(8000)}</b> · +12 за 03.10 <i>(стор отдаёт с опозданием)</i>`);
+    expect(m).toContain(`🤖 Google Play: <b>${nf.format(12210)}</b> · +198 за 02.10 <i>(стор отдаёт с опозданием)</i>`);
   });
 
-  it("не подключённый стор не печатается, ошибка называется прямо", () => {
-    const m = formatAppMessage(stats(), {
-      appStore: { status: "error", message: "App Store Connect 401: <bad>" },
-      play: { status: "off" },
-    });
+  it("стор успел к отчётному дню — без пометки об опоздании", () => {
+    const m = formatAppMessage(stats(), { ...both, play: { status: "ok", date: "2026-10-04", day: 5, total: 100 } });
+    expect(m).toContain("🤖 Google Play: <b>100</b> · +5 за 04.10\n");
+  });
 
-    expect(m).toContain("App Store: нет данных (App Store Connect 401: &lt;bad&gt;)");
+  it("стор с ошибкой: строка с причиной, итог помечен, что он без этого стора", () => {
+    const m = formatAppMessage(stats(), {
+      appStore: both.appStore,
+      play: { status: "error", message: "нет доступа к бакету <x> (403)" },
+    });
+    expect(m).toContain(`⬇️ Всего скачиваний: <b>${nf.format(8000)}</b> <i>(без Google Play)</i> · 👤 DAU`);
+    expect(m).toContain("🤖 Google Play: нет данных (нет доступа к бакету &lt;x&gt; (403))");
+  });
+
+  it("не подключённый стор не печатается и итог не помечает", () => {
+    const m = formatAppMessage(stats(), { appStore: both.appStore, play: { status: "off" } });
     expect(m).not.toContain("Google Play");
+    expect(m).toContain(`⬇️ Всего скачиваний: <b>${nf.format(8000)}</b> · 👤 DAU`);
   });
 
-  it("ни одного подключённого стора — блока нет вовсе", () => {
-    expect(formatAppMessage(stats())).not.toContain("сторов");
-    expect(formatAppMessage(stats(), { appStore: { status: "off" }, play: { status: "off" } })).not.toContain("сторов");
+  it("ни одного подключённого стора — строка DAU как была, без скачиваний", () => {
+    for (const m of [formatAppMessage(stats()), formatAppMessage(stats(), { appStore: { status: "off" }, play: { status: "off" } })]) {
+      expect(m).not.toContain("скачиваний");
+      expect(m).toContain(`👤 DAU: <b>${nf.format(1234)}</b> (+54 к 03.10)`);
+    }
   });
 });
 

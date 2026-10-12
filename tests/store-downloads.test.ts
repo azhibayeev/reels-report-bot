@@ -58,12 +58,17 @@ describe("parseAppStoreReport", () => {
 });
 
 describe("parsePlayInstallsCsv", () => {
-  it("берёт последний день файла и установки пользователей", () => {
-    expect(parsePlayInstallsCsv(utf16(PLAY_CSV))).toEqual({ date: "2026-10-02", downloads: 198 });
+  it("берёт последний день файла: установки за день и всего за всё время", () => {
+    expect(parsePlayInstallsCsv(utf16(PLAY_CSV))).toEqual({ date: "2026-10-02", day: 198, total: 12210 });
   });
 
   it("читает и UTF-8", () => {
-    expect(parsePlayInstallsCsv(Buffer.from(PLAY_CSV))).toEqual({ date: "2026-10-02", downloads: 198 });
+    expect(parsePlayInstallsCsv(Buffer.from(PLAY_CSV))).toEqual({ date: "2026-10-02", day: 198, total: 12210 });
+  });
+
+  it("без колонки Total User Installs — total null, итог соберут суммой по месяцам", () => {
+    const csv = "Date,Package Name,Daily User Installs\n2026-10-01,com.qurany.app,210\n2026-10-02,com.qurany.app,198\n";
+    expect(parsePlayInstallsCsv(Buffer.from(csv))).toEqual({ date: "2026-10-02", day: 198, total: null });
   });
 
   it("файл без строк — null, чтобы взять прошлый месяц", () => {
@@ -107,24 +112,69 @@ describe("App Store Connect", () => {
     expect(ok).toBe(true);
   });
 
-  it("идёт назад от вчера до первого готового отчёта и называет его дату", async () => {
-    const asked: string[] = [];
+  // Отчёт Apple с N скачиваниями Qurany (первые) — для месячных и дневных ответов.
+  const tsvWith = (n: number) =>
+    gzipSync(Buffer.from([ASC_HEADER.join("\t"), ascRow("6760942823", "1F", n), ascRow("6476192288", "1F", 50)].join("\n")));
+  const notFound = () => new Response('{"errors":[{"code":"NOT_FOUND"}]}', { status: 404 });
+
+  it("последний готовый день — от вчера назад; «+» за него = первые + повторные", async () => {
+    const daily: string[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
         const u = new URL(url);
         expect(u.searchParams.get("filter[vendorNumber]")).toBe("11112222");
         const date = u.searchParams.get("filter[reportDate]") as string;
-        asked.push(date);
+        if (u.searchParams.get("filter[frequency]") === "DAILY") daily.push(date);
         // Apple ещё не выложил 04.10 — как в жизни.
-        if (date === "2026-10-04") return new Response('{"errors":[{"code":"NOT_FOUND"}]}', { status: 404 });
+        if (date === "2026-10-04") return notFound();
         return new Response(gzipSync(Buffer.from(ASC_TSV)), { status: 200 });
       })
     );
 
     const r = await getAppStoreDownloads(NOW);
-    expect(asked).toEqual(["2026-10-04", "2026-10-03"]);
-    expect(r).toEqual({ status: "ok", date: "2026-10-03", downloads: 7, redownloads: 5 });
+    expect(daily.slice(0, 2)).toEqual(["2026-10-04", "2026-10-03"]);
+    expect(r).toMatchObject({ status: "ok", date: "2026-10-03", day: 12 });
+  });
+
+  it("всего за всё время = закрытые месяцы с выхода (18.08) + дни текущего до отчётного", async () => {
+    const asked: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const u = new URL(url);
+        const freq = u.searchParams.get("filter[frequency]");
+        const date = u.searchParams.get("filter[reportDate]") as string;
+        asked.push(`${freq} ${date}`);
+        if (freq === "MONTHLY") return date === "2026-08" ? new Response(tsvWith(1000), { status: 200 })
+          : date === "2026-09" ? new Response(tsvWith(2000), { status: 200 }) : notFound();
+        if (date === "2026-10-04") return notFound();
+        return new Response(tsvWith(10), { status: 200 }); // 01–03.10 по 10
+      })
+    );
+
+    const r = await getAppStoreDownloads(NOW);
+    expect(r).toEqual({ status: "ok", date: "2026-10-03", day: 10, total: 1000 + 2000 + 3 * 10 });
+    // Месяцы до выхода не спрашиваем.
+    expect(asked.filter((a) => a.startsWith("MONTHLY"))).toEqual(["MONTHLY 2026-08", "MONTHLY 2026-09"]);
+  });
+
+  it("месячного отчёта ещё нет (начало месяца) — месяц собирается из дневных", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const u = new URL(url);
+        const freq = u.searchParams.get("filter[frequency]");
+        const date = u.searchParams.get("filter[reportDate]") as string;
+        if (freq === "MONTHLY") return date === "2026-08" ? new Response(tsvWith(1000), { status: 200 }) : notFound();
+        if (date.startsWith("2026-09")) return new Response(tsvWith(5), { status: 200 }); // 30 дней по 5
+        if (date === "2026-10-01") return new Response(tsvWith(7), { status: 200 });
+        return notFound();
+      })
+    );
+
+    const r = await getAppStoreDownloads(new Date("2026-10-02T05:45:00Z"));
+    expect(r).toEqual({ status: "ok", date: "2026-10-01", day: 7, total: 1000 + 30 * 5 + 7 });
   });
 
   it("без ключей — «не подключено», без запросов", async () => {
@@ -177,7 +227,35 @@ describe("Google Play", () => {
       "stats/installs/installs_com.qurany.app_202610_overview.csv",
       "stats/installs/installs_com.qurany.app_202609_overview.csv",
     ]);
-    expect(r).toEqual({ status: "ok", date: "2026-09-02", downloads: 198 });
+    expect(r).toEqual({ status: "ok", date: "2026-09-02", day: 198, total: 12210 });
+  });
+
+  it("без Total User Installs — всего = сумма Daily User Installs по всем месячным файлам", async () => {
+    const csv = (rows: string) => utf16("Date,Package Name,Daily User Installs\n" + rows);
+    const files: Record<string, Buffer> = {
+      "stats/installs/installs_com.qurany.app_202608_overview.csv": csv("2026-08-30,com.qurany.app,100\n2026-08-31,com.qurany.app,50\n"),
+      "stats/installs/installs_com.qurany.app_202609_overview.csv": csv("2026-09-01,com.qurany.app,20\n"),
+      "stats/installs/installs_com.qurany.app_202610_overview.csv": csv("2026-10-01,com.qurany.app,7\n2026-10-02,com.qurany.app,3\n"),
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.startsWith("https://oauth2.googleapis.com/token")) {
+          return new Response(JSON.stringify({ access_token: "tok", expires_in: 3600 }), { status: 200 });
+        }
+        const u = new URL(url);
+        if (u.pathname.endsWith("/o")) {
+          expect(u.searchParams.get("prefix")).toBe("stats/installs/installs_com.qurany.app_");
+          const items = [...Object.keys(files), "stats/installs/installs_com.qurany.app_202610_country.csv"].map((name) => ({ name }));
+          return new Response(JSON.stringify({ items }), { status: 200 });
+        }
+        const name = decodeURIComponent(u.pathname.split("/o/")[1]);
+        return files[name] ? new Response(new Uint8Array(files[name]), { status: 200 }) : new Response("nf", { status: 404 });
+      })
+    );
+
+    const r = await getPlayDownloads(NOW);
+    expect(r).toEqual({ status: "ok", date: "2026-10-02", day: 3, total: 100 + 50 + 20 + 7 + 3 });
   });
 
   it("без бакета — «не подключено»", async () => {
